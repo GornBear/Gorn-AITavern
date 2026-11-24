@@ -1,0 +1,797 @@
+:root {
+  /* 藍色星空主題 */
+  --bg: #070b18;
+  --panel: rgba(13, 20, 41, .86);   /* 半透明：隱約透出背後的星空 */
+  --panel-solid: #0e1630;           /* 對話框等需要完全不透明的地方 */
+  --panel2: #17213f;
+  --border: #253256;
+  --text: #e3e9f8;
+  --muted: #8b97ba;
+  --accent: #79a8ff;
+  --accent2: #c2a8ff;
+  --glow: color-mix(in srgb, var(--accent) 35%, transparent); /* 跟著主題色 */
+  --user: rgba(44, 74, 156, .92);
+  --bot: rgba(30, 44, 88, .93);    /* 比背景亮一階，對話框才分得出來 */
+  --bot-border: rgba(130, 160, 240, .28);
+  --user-name: #ffb648;            /* 使用者名稱：橘黃色 */
+  --danger: #e06c7a;
+  --quote: #ffd36e;                /* 台詞高亮：暖金色，和藍底、白字都拉開對比 */
+  --radius: 10px;
+  font-family: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", system-ui, sans-serif;
+  color-scheme: dark;
+  scrollbar-color: #2b3b68 transparent;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; color: var(--text); }
+/* 夜空底色＋星雲 */
+html {
+  background:
+    radial-gradient(ellipse 60% 45% at 12% 8%, rgba(64, 96, 210, .22), transparent 70%),
+    radial-gradient(ellipse 55% 40% at 88% 88%, rgba(126, 82, 214, .17), transparent 70%),
+    radial-gradient(ellipse 90% 28% at 55% 45%, rgba(70, 130, 230, .07), transparent 70%),
+    linear-gradient(180deg, #060a17 0%, #0a1230 55%, #0b1028 100%);
+  background-attachment: fixed;
+}
+body { background: transparent; }
+/* 外觀設定：背景（stars 星空／night 夜空漸層／plain 純色／image 自訂圖片）；後三種不顯示星星 */
+html[data-bg]:not([data-bg="stars"]) body::before,
+html[data-bg]:not([data-bg="stars"]) body::after,
+html[data-bg]:not([data-bg="stars"])::before { display: none; }
+html[data-bg="plain"] { background: var(--bg); }
+html[data-bg="image"] {
+  background: linear-gradient(rgba(5, 8, 20, var(--bg-dim, .55)), rgba(5, 8, 20, var(--bg-dim, .55))), var(--bg-image, none) center / cover no-repeat fixed, var(--bg);
+}
+/* 星星：三層。body::before 是滿天的小星星（不動）；body::after 與 html::before 是比較亮、帶光暈的星星，
+   以不同的節奏、錯開的時間閃爍 */
+body::before, body::after, html::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; background-repeat: repeat; }
+body::before {
+  background-image:
+    radial-gradient(1px 1px at 23px 41px, #fff, transparent),
+    radial-gradient(1px 1px at 131px 87px, rgba(220, 230, 255, .85), transparent),
+    radial-gradient(1.4px 1.4px at 71px 151px, #d6e4ff, transparent),
+    radial-gradient(1px 1px at 189px 23px, rgba(255, 255, 255, .7), transparent),
+    radial-gradient(1.2px 1.2px at 97px 211px, rgba(200, 215, 255, .8), transparent),
+    radial-gradient(1px 1px at 251px 173px, rgba(255, 255, 255, .6), transparent),
+    radial-gradient(1px 1px at 163px 263px, rgba(210, 225, 255, .7), transparent),
+    radial-gradient(1.2px 1.2px at 293px 113px, rgba(255, 255, 255, .75), transparent);
+  background-size: 211px 197px, 263px 241px, 307px 283px, 233px 269px, 349px 317px, 281px 223px, 331px 293px, 373px 359px;
+}
+/* 亮星：白色核心＋淡藍光暈 */
+body::after {
+  background-image:
+    radial-gradient(circle 4px at 53px 67px, #fff 0 22%, rgba(190, 210, 255, .55) 40%, transparent),
+    radial-gradient(circle 3.5px at 211px 139px, #f2f6ff 0 22%, rgba(180, 205, 255, .5) 42%, transparent),
+    radial-gradient(circle 4.5px at 157px 311px, #fff 0 20%, rgba(210, 195, 255, .55) 40%, transparent),
+    radial-gradient(circle 3.5px at 337px 59px, #eef4ff 0 22%, rgba(180, 205, 255, .5) 42%, transparent),
+    radial-gradient(circle 3px at 281px 227px, #fff 0 25%, rgba(190, 210, 255, .45) 45%, transparent),
+    radial-gradient(circle 4px at 89px 389px, #fff 0 22%, rgba(190, 210, 255, .5) 40%, transparent);
+  background-size: 401px 379px, 457px 433px, 523px 491px, 587px 547px, 349px 461px, 613px 509px;
+  animation: twinkle 3.4s ease-in-out infinite alternate;
+}
+html::before {
+  background-image:
+    radial-gradient(circle 4px at 127px 33px, #fff 0 22%, rgba(190, 210, 255, .55) 40%, transparent),
+    radial-gradient(circle 3.5px at 263px 187px, #f4f0ff 0 22%, rgba(205, 190, 255, .5) 42%, transparent),
+    radial-gradient(circle 4px at 31px 241px, #fff 0 22%, rgba(180, 205, 255, .5) 40%, transparent),
+    radial-gradient(circle 3px at 379px 307px, #fff 0 25%, rgba(190, 210, 255, .45) 45%, transparent),
+    radial-gradient(circle 4.5px at 199px 401px, #eef4ff 0 20%, rgba(190, 210, 255, .55) 40%, transparent);
+  background-size: 433px 409px, 499px 461px, 541px 521px, 467px 563px, 631px 587px;
+  animation: twinkle 4.6s ease-in-out -2.3s infinite alternate;
+}
+@keyframes twinkle { 0% { opacity: 1; } 70% { opacity: .25; } 100% { opacity: .05; } }
+/* 動畫：data-motion = on（開啟）／off（關閉） */
+html[data-motion="off"] body::after, html[data-motion="off"]::before { animation: none; }
+/* 看不到視窗時暫停所有動畫（main.js 依 visibilitychange 設定 data-hidden），省 CPU／GPU */
+html[data-hidden] *, html[data-hidden] *::before, html[data-hidden] *::after, html[data-hidden]::before { animation-play-state: paused !important; }
+html[data-motion="off"] .card, html[data-motion="off"] .card:hover { transition: none; transform: none; }
+::selection { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+body { font-size: var(--font-size, 15px); line-height: 1.6; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button {
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 12px; cursor: pointer; transition: background .15s, border-color .15s; white-space: nowrap; flex-shrink: 0;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 78%, #10183a), color-mix(in srgb, var(--accent) 55%, var(--accent2))); color: #fff; border-color: color-mix(in srgb, var(--accent) 85%, #fff); font-weight: 600; }
+button.primary:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 50%, #fff); box-shadow: 0 0 14px var(--glow); }
+button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+button.success { background: #3f9d5a; border-color: #3f9d5a; color: #fff; font-weight: 600; }
+button.success:hover:not(:disabled) { background: #4bb468; border-color: #4bb468; }
+button.icon { padding: 4px 8px; background: transparent; border-color: transparent; font-size: 17px; }
+button.icon:hover { background: var(--panel2); }
+button.small { padding: 2px 8px; font-size: 13px; }
+input[type=text], input[type=search], input[type=number], input[type=password], textarea, select {
+  width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; outline: none;
+}
+/* 選單：選項很長（設定檔、使用者設定檔的名稱）時不會撐寬版面，超出的部分用…顯示；展開的清單照樣顯示完整名稱 */
+select { max-width: 100%; min-width: 0; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+textarea { resize: vertical; }
+.muted { color: var(--muted); font-size: 13px; }
+input.secret { -webkit-text-security: disc; text-security: disc; font-family: monospace; }
+input.secret::placeholder { font-family: inherit; }
+/* API 金鑰欄＋右側的顯示／隱藏按鈕 */
+.key-field { display: flex; gap: 6px; align-items: stretch; }
+.key-field input { flex: 1; min-width: 0; font-family: monospace; }
+.key-field input::placeholder { font-family: inherit; }
+.key-field button { flex: none; padding: 4px 10px; }
+[hidden] { display: none !important; }
+
+:root { --tabbar-h: 58px; }
+.view { height: calc(100vh - var(--tabbar-h)); height: calc(100dvh - var(--tabbar-h)); }
+
+/* ===== 底部快速切換欄 ===== */
+#tabbar { position: fixed; left: 0; right: 0; bottom: 0; height: var(--tabbar-h); display: flex; justify-content: space-between; background: var(--panel); border-top: 1px solid var(--border); z-index: 30; padding: 0 8%; }
+#tabbar button { flex: 0 1 140px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; background: none; border: none; border-radius: 0; color: var(--muted); font-size: 12px; border-top: 2px solid transparent; }
+#tabbar button .ti { font-size: 20px; line-height: 1.2; filter: grayscale(.6); }
+#tabbar button:hover { color: var(--text); }
+#tabbar button.active { color: var(--accent); }
+/* 選取標示：切換頁面時左右滑動（頁面本身直接切換；動畫關閉時標示也直接跳過去） */
+#tabbar .nav-ind { position: absolute; left: 0; top: -1px; height: 2px; width: 0; background: var(--accent); pointer-events: none;
+  transition: transform .25s cubic-bezier(.3, .7, .3, 1), width .25s cubic-bezier(.3, .7, .3, 1); }
+#tabbar .nav-ind.no-anim, html[data-motion="off"] #tabbar .nav-ind { transition: none; }
+#tabbar button.active .ti { filter: none; }
+
+/* ===== 設定頁 ===== */
+#settingsView { display: flex; flex-direction: column; }
+.settings-main { flex: 1; overflow-y: auto; padding: 18px 20px 30px; }
+#settingsBody, .settings-foot { max-width: 860px; margin: 0 auto; }
+.settings-foot { display: flex; gap: 8px; justify-content: flex-end; padding-top: 16px; position: sticky; bottom: 0; background: linear-gradient(transparent, rgba(8, 13, 32, .94) 35%); padding-bottom: 6px; }
+.avatar-ph { background: var(--panel2); display: grid; place-items: center; font-weight: 700; color: var(--accent); }
+/* 使用者沒有頭像：人像剪影（顏色跟著主題色），剪影底部貼齊圓框 */
+.avatar-ph.user-ph { overflow: hidden; place-items: end center; }
+.avatar-ph.user-ph svg { width: 78%; height: 78%; fill: currentColor; opacity: .75; display: block; }
+
+/* ===== 首頁 ===== */
+#homeView { display: flex; flex-direction: column; }
+.topbar { display: flex; align-items: center; gap: 12px; padding: 10px 20px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.topbar h1 { font-size: 20px; margin: 0; color: var(--accent); letter-spacing: 1px; white-space: nowrap; text-shadow: 0 0 12px var(--glow); }
+.topbar #charSearch { flex: 1; min-width: 160px; max-width: 610px; }
+.topbar .home-sort { flex: 0 0 auto; }
+.topbar-actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.home-main { flex: 1; overflow-y: auto; padding: 18px 20px 40px; scrollbar-gutter: stable; }
+.section-title { font-size: 16px; margin: 8px 0 12px; color: var(--accent); }
+/* 卡片固定寬度：收合其他欄位、視窗變寬時都不會跟著縮放 */
+.char-grid, .world-grid { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.char-grid > .card { width: 190px; } /* 一行放得下四個兩字標籤（38px×4＋間距） */
+.world-grid > .card { width: 250px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; transition: border-color .15s, transform .15s, box-shadow .15s; }
+.card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 0 18px var(--glow); }
+.create-card:hover { box-shadow: none; }
+.card .cover { aspect-ratio: 3 / 4; width: 100%; object-fit: cover; object-position: center top; display: block; cursor: pointer; background: var(--panel2); }
+.card .cover.avatar-ph { font-size: 56px; }
+.card .c-body { padding: 8px 10px 10px; display: grid; gap: 4px; }
+.card .c-name { font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .c-meta { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .c-name { cursor: pointer; }
+.card { position: relative; }
+/* 卡片右上角的小編輯按鈕 */
+.card-edit { position: absolute; top: 6px; right: 6px; z-index: 1; width: 28px; height: 28px; padding: 0; font-size: 13px; line-height: 1; border-radius: 50%; background: rgba(8, 14, 32, .7); border: 1px solid rgba(180, 200, 255, .2); opacity: .75; transition: opacity .15s, border-color .15s; }
+.card:hover .card-edit { opacity: 1; }
+.card-edit:hover { border-color: var(--accent); }
+/* 自訂ID排序時左上角的順序 ID（和右上角的編輯鈕對稱） */
+.card-order { position: absolute; top: 10px; left: 10px; z-index: 1; min-width: 20px; height: 20px; padding: 0 6px; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; border-radius: 999px; background: rgba(8, 14, 32, .7); border: 1px solid rgba(180, 200, 255, .2); color: var(--text); cursor: text; transition: border-color .15s; }
+.card-order.none { color: var(--muted); }
+.card-order:hover, .card-order:focus-visible { border-color: var(--accent); outline: none; }
+/* 點小框後換成輸入框：放在同一個位置 */
+input.card-order-input { position: absolute; top: 8px; left: 8px; z-index: 2; width: 6ch; height: 24px; padding: 2px 5px; box-sizing: border-box; font-size: 12px; border-radius: 6px; text-align: center; font-variant-numeric: tabular-nums; }
+.tag { display: inline-block; font-size: 11px; line-height: 16px; padding: 1px 7px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* 卡片上的標籤最多兩行 */
+.card .c-tags { display: flex; flex-wrap: wrap; gap: 4px; max-height: 44px; overflow: hidden; align-content: flex-start; min-height: 44px; } /* 標籤高 20px：兩行＋間距 4px＝44px */
+.c-actions { display: flex; gap: 6px; margin-top: 4px; }
+.c-actions button { flex: 1 1 auto; min-width: 0; padding: 5px 6px; font-size: 13px; white-space: nowrap; gap: 4px; }
+.c-actions button .ic { width: 14px; height: 14px; }
+.c-actions button:disabled { opacity: .45; cursor: default; }
+
+/* 角色詳情 */
+.char-detail { position: relative; display: grid; gap: 16px; }
+/* 右上角：順序 ID（小字，點一下編輯）＋編輯按鈕 */
+.detail-tools { position: absolute; top: 0; right: 0; z-index: 1; display: flex; align-items: center; gap: 8px; }
+.detail-edit { font-size: 13px; padding: 5px 10px; }
+/* 角色詳情下方的卡片 token 估算 */
+.detail-tokens { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 10px; font-size: 12px; color: var(--muted); cursor: help; }
+.detail-tokens .dt-total { display: inline-flex; align-items: center; gap: 4px; color: var(--text); font-size: 13px; }
+.detail-tokens .dt-total .ic { width: 14px; height: 14px; color: var(--accent); }
+.detail-tokens b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.order-tag { border: none; background: transparent; padding: 2px 4px; font-size: 12px; color: var(--muted); cursor: text; border-radius: 6px; font-variant-numeric: tabular-nums; }
+.order-tag:hover, .order-tag:focus-visible { color: var(--accent); background: var(--panel2); outline: none; }
+/* 比一般輸入框小：剛好放得下 4 位數（要蓋過 input[type=text] 的預設寬度與內距） */
+.detail-tools input.order-input { width: 6ch; padding: 2px 5px; font-size: 12px; line-height: 16px; border-radius: 6px; text-align: center; font-variant-numeric: tabular-nums; }
+.detail-top { display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: start; }
+.detail-imgs { display: grid; gap: 10px; justify-items: center; }
+.detail-cover { width: 210px; aspect-ratio: 3 / 4; border-radius: 12px; object-fit: cover; object-position: center top; border: 1px solid var(--border); font-size: 64px; }
+.detail-av { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.detail-avatar { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; object-position: center 20%; border: 1px solid var(--border); font-size: 22px; }
+.detail-info { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.detail-name { font-size: 22px; font-weight: 700; padding-right: 110px; word-break: break-word; }
+.detail-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.detail-tags .tag { font-size: 12px; }
+.tag-link { cursor: pointer; transition: border-color .15s, color .15s; }
+.tag-link:hover, .tag-link:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+.detail-label { color: var(--accent); font-size: 13px; margin-top: 6px; }
+.detail-intro { white-space: pre-wrap; word-break: break-word; max-height: 46vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 14px; line-height: 1.6; }
+.char-detail > .c-actions { margin: 0; }
+.char-detail > .c-actions button { padding: 9px 12px; font-size: 15px; }
+@media (max-width: 640px) {
+  .char-detail { padding-top: 38px; }
+  .detail-top { grid-template-columns: 1fr; }
+  .detail-name { padding-right: 0; }
+  .detail-cover { width: 160px; }
+}
+.empty-home { text-align: center; padding: 30px 20px; border: 1px solid var(--border); border-radius: 14px; color: var(--muted); flex: 1; min-width: 240px; }
+
+/* ===== 對話頁 ===== */
+#chatView { display: flex; }
+#sidebar { width: 270px; flex: none; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 12px; gap: 10px; }
+.side-top { display: flex; justify-content: space-between; align-items: center; min-height: 28px; }
+#chatList { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+#chatList .ch-av { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; object-position: center 20%; flex: none; font-size: 13px; }
+#chatSearch { padding: 5px 9px; font-size: 13px; }
+#chatList li { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+#chatList li:hover { background: var(--panel2); }
+#chatList li.active { background: var(--panel2); border-color: var(--accent); }
+#chatList .ch-info { flex: 1; min-width: 0; }
+#chatList .ch-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#chatList .ch-sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#chatList .ch-tools { display: flex; opacity: 0; transition: opacity .15s; }
+#chatList li:hover .ch-tools, #chatList li.active .ch-tools { opacity: 1; }
+#chatList .ch-tools button { padding: 0 4px; background: none; border: none; font-size: 13px; }
+#chatList input { padding: 3px 6px; }
+.side-foot { display: flex; gap: 6px; }
+.side-foot button { flex: 1; padding: 6px 4px; font-size: 13px; }
+
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#chatHead { display: flex; align-items: center; gap: 10px; padding: 8px 18px; border-bottom: 1px solid var(--border); background: var(--panel); min-height: 56px; }
+.head-info { flex: 1; min-width: 0; }
+.chat-title { font-weight: 700; font-size: 17px; cursor: text; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 6px; padding: 0 4px; margin-left: -4px; }
+.chat-title:hover { background: var(--panel2); }
+.chat-title .title-edit { width: 14px; height: 14px; margin-left: 6px; vertical-align: -1px; opacity: 0; color: var(--muted); }
+.chat-title:hover .title-edit { opacity: 1; }
+.chat-sub { font-size: 12px; color: var(--muted); }
+/* 對話頁右上角的模型選單 */
+.model-pick { display: inline-flex; align-items: center; gap: 4px; flex: 0 1 230px; min-width: 0; padding: 0 4px 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); color: var(--muted); }
+.model-pick:hover, .model-pick:focus-within { border-color: var(--accent); }
+.model-pick select { border: none; background: transparent; padding: 5px 2px; font-size: 13px; color: var(--text); min-width: 0; cursor: pointer; text-overflow: ellipsis; }
+.model-pick select option { background: var(--panel-solid); }
+/* 思考選單：跟隨設定時淡色，這段對話自己指定時用強調色 */
+.think-pick { flex: 0 1 auto; }
+.think-pick select { color: var(--muted); }
+.think-pick.on { border-color: var(--accent); color: var(--accent); }
+.think-pick.on select { color: var(--accent); font-weight: 600; }
+.pick-label { font-size: 13px; white-space: nowrap; margin-right: -2px; }
+@media (max-width: 600px) { .pick-label { display: none; } } /* 窄畫面只留圖示，省空間 */
+/* 設定 → 外觀 */
+.bg-image-box { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.bg-image-box .btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.btns-right { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; } /* 靠右的按鈕列（例如對話設定的儲存） */
+.bg-thumb { width: 200px; aspect-ratio: 16 / 9; border-radius: 10px; border: 1px solid var(--border); background: var(--bg) center / cover no-repeat; display: grid; place-items: center; font-size: 12px; color: var(--muted); flex: none; }
+.range-row { display: flex; align-items: center; gap: 10px; }
+.range-row input { flex: 1; accent-color: var(--accent); }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.swatch { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; border-radius: 999px; font-size: 13px; }
+.swatch span { width: 16px; height: 16px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px color-mix(in srgb, var(--c) 60%, transparent); }
+.swatch.on { border-color: var(--c); color: var(--c); }
+.accent-pick { width: 40px; height: 30px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); cursor: pointer; }
+/* 設定 → 模型設定檔 */
+.prof-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.prof-row select { flex: 1 1 200px; min-width: 0; width: 0; } /* width: 0＋flex：寬度只看版面，不看選項文字多長 */
+#chatHead input { font-weight: 700; font-size: 16px; max-width: 480px; }
+
+#messages { flex: 1; overflow-y: auto; padding: 18px max(16px, calc((100% - 860px) / 2)); display: flex; flex-direction: column; gap: 16px; }
+.empty { margin: auto; text-align: center; color: var(--text); }
+.msg { display: flex; gap: 10px; align-items: flex-start; }
+.msg .mav { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; object-position: center 20%; flex: none; background: var(--panel2); display: grid; place-items: center; color: var(--accent); font-weight: 700; }
+.msg .mcol { flex: 1; min-width: 0; }
+.msg .mbody { background: var(--bot); border: 1px solid var(--bot-border); border-radius: var(--radius); padding: 9px 13px; box-shadow: 0 2px 12px rgba(0, 0, 0, .25); }
+.msg.user .mbody { background: var(--user); border-color: rgba(150, 180, 255, .35); }
+.msg .mav { cursor: pointer; }
+/* 使用者訊息靠右（像聊天軟體） */
+.msg.user { flex-direction: row-reverse; }
+.msg.user .mcol { display: flex; flex-direction: column; align-items: flex-end; }
+.msg.user .mbody { max-width: min(85%, 720px); }
+.msg.user .mhead { flex-direction: row-reverse; }
+.msg.user .mbody:has(textarea.edit) { width: min(85%, 720px); }
+.msg .mhead { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin: 0 4px 4px; max-width: 100%; }
+.msg .mname { font-weight: 700; color: var(--accent); white-space: nowrap; flex: none; }
+.msg.user .mname { color: var(--user-name); }
+.msg .mtime { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* 對話框下方的操作列 */
+.mactions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 2px; margin-top: 3px; padding-right: 4px; opacity: .55; transition: opacity .15s; }
+.msg:hover .mactions, .msg.last .mactions { opacity: 1; }
+.mactions button { background: none; border: 1px solid transparent; padding: 1px 7px; font-size: 12px; color: var(--muted); border-radius: 6px; }
+.mactions button:hover:not(:disabled) { color: var(--text); border-color: var(--border); background: var(--panel2); }
+#messages.busy .mactions button { opacity: .35; pointer-events: none; } /* 生成中：訊息下方的按鈕暫時不能按 */
+#messages { overflow-anchor: none; } /* 往上補畫舊訊息時自己調整捲動位置 */
+/* 畫面外的訊息先不排版、不繪製（捲到附近才處理），很長的對話也不會變慢 */
+/* 最後 40 則一定完整排版，捲到最底、生成新訊息時位置才準確 */
+#messages > .msg:not(:nth-last-child(-n+40)) { content-visibility: auto; contain-intrinsic-size: auto 160px; }
+.load-earlier { display: flex; justify-content: center; gap: 8px; }
+/* 左側：訊息內容的搜尋結果 */
+.msg-results { display: grid; gap: 4px; }
+.msg-results-head { font-size: 12px; color: var(--muted); padding: 8px 4px 2px; border-top: 1px dashed var(--border); margin-top: 4px; }
+.msg-hit { display: grid; gap: 2px; text-align: left; white-space: normal; background: transparent; border-color: transparent; padding: 6px 8px; }
+.msg-hit:hover { background: var(--panel2); border-color: var(--border); }
+.hit-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hit-snippet { font-size: 12px; color: var(--muted); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.hit-snippet mark { background: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--text); border-radius: 3px; padding: 0 1px; }
+.msg.flash .mbody { animation: msg-flash 2s ease-out; }
+@keyframes msg-flash { 0%, 30% { box-shadow: 0 0 0 2px var(--accent), 0 0 18px var(--glow); } 100% { box-shadow: none; } }
+.mactions .swipe-n { font-size: 12px; color: var(--muted); padding: 0 2px; }
+.mactions .mtiming { margin-right: auto; display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); padding: 0 4px; cursor: default; font-variant-numeric: tabular-nums; }
+.mactions .mtiming > .ic { width: 12px; height: 12px; }
+.mactions .sep { width: 1px; height: 14px; background: var(--border); margin: 0 4px; }
+.msg .mtext { white-space: pre-wrap; word-break: break-word; }
+.msg .mtext em { color: var(--muted); }
+/* 台詞（formatText 把引號內的文字包成 <q>）：引號本來就在文字裡，關掉瀏覽器自動加的引號，不然會出現兩次 */
+q { quotes: none; }
+.mtext q { color: var(--quote); font-weight: 500; }
+.msg .mtext code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+/* 訊息中的 HTML 排版 */
+.mtext p { margin: 0 0 .7em; }
+.mtext p:last-child { margin-bottom: 0; }
+.mtext pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; overflow-x: auto; white-space: pre; margin: .5em 0; }
+.mtext pre code { background: none; padding: 0; }
+.mtext ul, .mtext ol { margin: .3em 0; padding-left: 1.6em; }
+.mtext li { margin: .15em 0; }
+.mtext blockquote { margin: .5em 0; padding: 4px 12px; border-left: 3px solid var(--accent); background: rgba(255,255,255,.03); }
+.mtext h1, .mtext h2, .mtext h3, .mtext h4, .mtext h5, .mtext h6 { margin: .5em 0 .3em; line-height: 1.3; color: var(--accent); }
+.mtext h1 { font-size: 1.4em; } .mtext h2 { font-size: 1.25em; } .mtext h3 { font-size: 1.12em; } .mtext h4, .mtext h5, .mtext h6 { font-size: 1em; }
+.mtext hr { border: none; border-top: 1px solid var(--border); margin: .8em 0; }
+.mtext details { border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px; margin: .5em 0; background: rgba(0,0,0,.15); }
+.mtext details > summary { cursor: pointer; font-weight: 600; color: var(--accent2); padding: 2px 0; }
+.mtext details[open] > summary { margin-bottom: 4px; border-bottom: 1px dashed var(--border); }
+.mtext table { border-collapse: collapse; margin: .5em 0; display: block; overflow-x: auto; max-width: 100%; }
+.mtext th, .mtext td { border: 1px solid var(--border); padding: 4px 8px; vertical-align: top; }
+.mtext th { background: var(--panel2); }
+.mtext img { max-width: 100%; height: auto; border-radius: 6px; }
+/* 外部圖片還沒載入時的佔位：點一下才連到對方網站載入 */
+.ext-img { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 4px 10px; margin: 2px 0; border: 1px dashed var(--border); border-radius: 8px; background: var(--panel2); color: var(--muted); font-size: 12px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.ext-img:hover, .ext-img:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+/* 備份清單：手動、還原前的備份標籤 */
+.bk-kind { margin-left: 8px; vertical-align: 1px; }
+.mtext a { color: var(--accent2); }
+.mtext mark { background: var(--accent); color: #07102a; padding: 0 3px; border-radius: 3px; }
+.msg textarea.edit { min-height: 120px; margin-top: 4px; }
+.msg .edit-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+.think { margin: 4px 0 6px; border-left: 3px solid var(--border); padding-left: 10px; color: var(--muted); font-size: 13px; }
+.think summary { cursor: pointer; user-select: none; }
+.think-body { white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; margin-top: 4px; }
+.cursor::after { content: "▍"; animation: blink 1s steps(2) infinite; color: var(--accent); }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* 輸入區：上排「身分選單（貼齊輸入框左側）｜token 紀錄｜繼續、只加入」，下排「輸入框（佔滿寬度）｜送出」 */
+#composer { border-top: 1px solid var(--border); background: var(--panel); padding: 8px 18px 10px; display: flex; flex-direction: column; gap: 6px; }
+.composer-top { display: flex; gap: 6px; align-items: center; }
+.composer-top .as-who-label { flex: none; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.composer-top .as-who { flex: none; width: 140px; padding: 2px 6px; font-size: 12px; }
+/* 酒館自己的輸入視窗（取代瀏覽器的 prompt()，不會出現「127.0.0.1:8000 顯示」） */
+.ask-box { width: min(420px, 100%); justify-items: stretch; text-align: left; }
+.ask-box h3 { margin: 0; font-size: 16px; color: var(--accent); }
+.ask-box .ask-note { margin: -4px 0 0; font-size: 13px; color: var(--muted); text-align: left; }
+.ask-box .ask-btns { display: flex; justify-content: flex-end; gap: 8px; }
+.ask-box .ask-body { white-space: pre-line; line-height: 1.6; color: var(--text); opacity: .85; }
+/* 更換名字：勾選要改的地方（依前後文分組） */
+.crop-box.rn-box { width: min(780px, 100%); max-height: 88vh; justify-items: stretch; text-align: left; overflow-y: auto; }
+.crop-box.rn-box h3 { margin: 0; font-size: 16px; color: var(--accent); }
+.crop-box.rn-box .ask-note { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.6; }
+.crop-box.rn-box .ask-btns { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.rn-tools { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.rn-list { max-height: 42vh; overflow-y: auto; overflow-x: hidden; display: grid; gap: 4px; border: 1px solid var(--border); border-radius: 10px; padding: 6px; background: var(--bg); }
+.rn-ctx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rn-ctx mark { background: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--text); border-radius: 3px; padding: 0 2px; }
+.rn-sub { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+.rn-sub:hover { background: var(--panel2); }
+.rn-item > summary { list-style: none; }
+.rn-item > summary::-webkit-details-marker { display: none; }
+.rn-item[open] > summary { background: var(--panel2); }
+/* 點開後的完整內容：這一處標亮、其他同名的地方淡淡標示 */
+.rn-full { margin: 2px 6px 8px 34px; padding: 8px 10px; max-height: 30vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+  font-size: 13px; line-height: 1.7; border-left: 2px solid var(--accent); background: var(--panel); border-radius: 0 6px 6px 0; }
+.rn-full mark.here { background: color-mix(in srgb, var(--accent) 45%, transparent); color: var(--text); border-radius: 3px; padding: 0 2px; }
+.rn-full mark.other { background: none; color: var(--accent); text-decoration: underline dotted; }
+.rn-where { flex: none; font-size: 12px; min-width: 52px; }
+.composer-top .as-who.on { border-color: var(--accent); color: var(--accent); } /* 不是用「我」的身分說話時提醒一下 */
+.composer-top button { flex: none; padding: 2px 10px; }
+/* token 紀錄：一行顯示（詳細內容在滑鼠提示裡） */
+.status { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.composer-main { display: flex; gap: 10px; align-items: flex-end; }
+#input { flex: 1; max-height: 40vh; min-height: 46px; resize: none; }
+.composer-main > .primary, .composer-main > .danger { flex: none; width: 92px; height: 46px; }
+/* 第一次啟動的引導 */
+.first-run { display: grid; gap: 12px; }
+.first-run > p { margin: 0; line-height: 1.7; }
+.guide-step { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); }
+.guide-step .grow { min-width: 0; }
+.guide-step p { margin: 2px 0 0; }
+.guide-num { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; color: var(--accent); border: 2px solid var(--accent); }
+.guide-num .ic { width: 16px; height: 16px; }
+.guide-step.done .guide-num { color: #4bb468; border-color: #4bb468; }
+.guide-title { font-weight: 600; }
+.guide-ok { margin-left: 8px; font-size: 12px; font-weight: 400; color: #4bb468; }
+@media (max-width: 600px) { .guide-step { flex-wrap: wrap; } .guide-step > button { margin-left: 42px; } }
+/* 生成參數的用途說明（逐條列出） */
+.param-notes { margin: 4px 0 0; padding-left: 22px; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.param-notes b { color: var(--text); font-weight: 600; }
+/* 設定頁底部左側的「恢復預設」 */
+.reset-row { display: flex; justify-content: flex-start; margin-top: 4px; }
+.edit-actions .as-who { width: auto; padding: 3px 6px; font-size: 12px; margin-right: auto; }
+/* 你扮演的 NPC、你寫的旁白：用旁白的外觀，名字旁邊標「你扮演」 */
+.msg .npc-tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; margin-left: 4px; }
+
+/* 對話框 */
+.modal { position: fixed; inset: 0; background: rgba(2, 5, 16, .62); display: grid; place-items: center; z-index: 50; padding: 16px; }
+.modal-box { background: var(--panel-solid); box-shadow: 0 0 40px rgba(60, 100, 220, .18); border: 1px solid var(--border); border-radius: 14px; width: min(900px, 100%); max-height: 92vh; display: flex; flex-direction: column; }
+/* 固定大小的對話框（角色編輯器）：高度固定，內容超過時在裡面捲動 */
+.modal-box.fixed-size { height: min(92vh, 980px); }
+.modal-box.fixed-size .modal-body { flex: 1; min-height: 0; scrollbar-gutter: stable; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.modal-head h2 { margin: 0; font-size: 18px; }
+.modal-body { padding: 16px; overflow-y: auto; }
+.modal-foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-top: 1px solid var(--border); }
+.modal-foot:empty { display: none; }
+.modal-foot .left { margin-right: auto; display: flex; gap: 8px; flex-wrap: wrap; flex: 1 1 0; min-width: 0; }
+.modal-foot .right { display: flex; gap: 8px; flex: none; margin-left: auto; }
+
+.form { display: grid; gap: 12px; }
+.form label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; font-size: 14px; min-width: 0; }
+.form label > span { color: var(--muted); font-size: 13px; }
+.form .field-title { color: var(--text); font-size: 13px; margin-bottom: -4px; } /* 一組欄位共用的標題（下面的欄位各自只寫短名稱） */
+.form .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; }
+.form .row > * { min-width: 0; }
+.form .check { display: flex; align-items: center; gap: 8px; }
+.form .check input { width: auto; }
+.form fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; } /* 內容再長也不撐寬（fieldset 預設最小寬度＝內容寬度） */
+/* 對話設定：生成參數排成兩欄；「這段對話的你」選單旁顯示頭像 */
+.chat-settings .cs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.chat-settings .cs-grid input::placeholder { font-size: 12px; }
+.cs-you { display: flex; align-items: flex-end; gap: 10px; }
+.cs-you .grow { flex: 1; min-width: 0; }
+.cs-you-av .cs-av { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; display: block; }
+@media (max-width: 560px) { .chat-settings .cs-grid { grid-template-columns: 1fr; } }
+.form legend { color: var(--accent); padding: 0 6px; }
+.tok { font-size: 12px; color: var(--muted); text-align: right; }
+.tok.warn { color: var(--danger); }
+.small-note { font-size: 12px; margin: 0; }
+/* 使用者分頁最底下的頁尾：程式名稱、作者與版本 */
+.app-credit { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--muted); letter-spacing: .3px; }
+/* 設定檔損毀：固定在畫面上方的提示，按「×」才關掉 */
+.corrupt-banner { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 60; width: min(760px, calc(100% - 32px));
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--danger);
+  background: var(--panel-solid); box-shadow: 0 6px 24px rgba(0, 0, 0, .45); font-size: 13px; line-height: 1.7; }
+.corrupt-banner b { color: var(--danger); }
+.corrupt-banner p { margin: 2px 0 6px; }
+.corrupt-banner .grow { min-width: 0; flex: 1; }
+/* 還沒收到內容時的等待提示（訊息框裡） */
+.wait-note { color: var(--muted); font-size: 13px; }
+/* 世界書條目的觸發方式：關鍵字觸發／常駐 二選一的切換鈕 */
+.mode-line { display: grid; gap: 4px; }
+.mode-line > span { color: var(--muted); font-size: 13px; }
+.mode-switch { position: relative; display: inline-flex; justify-self: start; border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 3px; background: var(--panel2); cursor: pointer; }
+.mode-switch:hover { border-color: var(--accent); }
+/* 世界書條目裡的分組標題（遞迴設定）：和其他欄位名稱（插入位置、深度…）同樣的顏色與大小 */
+.entry-body .field-title { color: var(--muted); font-size: 13px; }
+/* 觸發方式那一行：左邊觸發方式、右邊停用／啟用 */
+.mode-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.enable-switch { position: relative; margin-left: auto; display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 3px; background: var(--panel2); cursor: pointer; }
+.enable-switch > span[data-v] { position: relative; z-index: 1; border-radius: 999px; padding: 5px 14px; color: var(--muted); pointer-events: none; }
+.enable-switch > span[data-v].on { color: #fff; font-weight: 600; }
+/* 滑動的色塊：位置和觸發方式按鈕一樣用滑動；點下時先換顏色再滑過去（由程式切換 is-off） */
+.enable-switch > .es-pill { position: absolute; left: 0; top: 3px; bottom: 3px; width: 0; border-radius: 999px; background: #2f9e5b; pointer-events: none;
+  transition: transform .22s cubic-bezier(.3, .7, .3, 1), width .22s cubic-bezier(.3, .7, .3, 1); } /* 啟用：綠 */
+.enable-switch.is-off > .es-pill { background: var(--danger); } /* 停用：紅 */
+.enable-switch > .es-pill.no-anim, html[data-motion="off"] .enable-switch > .es-pill { transition: none; }
+.enable-switch:hover { border-color: var(--accent); }
+.enable-switch.is-off { border-color: color-mix(in srgb, var(--danger) 60%, transparent); }
+.mode-switch > span[data-v] { position: relative; z-index: 1; border-radius: 999px; padding: 5px 14px; color: var(--muted); pointer-events: none; transition: color .2s; }
+.mode-switch > span[data-v].on { color: #0b1020; font-weight: 600; }
+/* 選中那一邊的底色：切換時左右滑動 */
+.mode-switch > .ms-pill { position: absolute; left: 0; top: 3px; bottom: 3px; width: 0; border-radius: 999px; background: var(--accent); pointer-events: none;
+  transition: transform .22s cubic-bezier(.3, .7, .3, 1), width .22s cubic-bezier(.3, .7, .3, 1); }
+.mode-switch > .ms-pill.no-anim, html[data-motion="off"] .mode-switch > .ms-pill { transition: none; }
+/* 世界設定 → 提示詞：整理角色卡規則 */
+.organize-row { display: flex; gap: 10px; align-items: flex-start; }
+.organize-row > button { flex: none; }
+.crop-box.organize-box { width: min(760px, 100%); max-height: 90vh; overflow-y: auto; justify-items: stretch; }
+.organize-member { display: grid; gap: 4px; padding-top: 8px; border-top: 1px solid var(--border); }
+.organize-orig { white-space: pre-wrap; font-size: 12px; color: var(--muted); max-height: 200px; overflow-y: auto; margin: 4px 0 0; padding: 8px; background: var(--panel2); border-radius: 8px; }
+@media (max-width: 600px) { .organize-row { flex-direction: column; } }
+/* API 金鑰外流提醒 */
+.key-warning { border: 1px solid rgba(224, 168, 74, .55); background: rgba(224, 168, 74, .10); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; line-height: 1.7; }
+.key-warning b { color: #e0a84a; font-size: 13px; }
+.key-warning p { margin: 2px 0 0; }
+/* 對話設定「生成與上下文」的說明：每項一段，名稱粗體 */
+.cs-help p { margin: 4px 0 0; }
+.cs-help b { color: var(--text); font-weight: 600; }
+/* 需要注意的提醒（和金鑰警告同一種琥珀色框） */
+.note-warn { border: 1px solid rgba(224, 168, 74, .55); background: rgba(224, 168, 74, .10); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; line-height: 1.7; margin: 8px 0 0; }
+.note-warn b { color: #e0a84a; }
+/* 設定檔有未儲存的修改 */
+.prof-row select.dirty { border-color: #e0a84a; color: #ffd27a; }
+/* 「（新增設定檔）」：灰色，和一般的設定檔區分（選中時選單本身也是灰字） */
+option.opt-new { color: var(--muted); }
+.prof-row select:has(option.opt-new:checked):not(.dirty) { color: var(--muted); }
+/* 對話設定：世界書開關 */
+.book-toggles { display: flex; flex-direction: column; gap: 6px; }
+.book-toggles .muted { margin-left: 4px; font-size: 12px; }
+/* API 設定的步驟說明 */
+.setup-steps { margin: 0 0 4px; padding: 8px 12px 8px 32px; background: color-mix(in srgb, var(--accent) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent); border-radius: 8px; font-size: 13px; line-height: 1.7; }
+.setup-steps li::marker { color: var(--accent); font-weight: 700; }
+
+/* ---------- 首頁：可收合的欄位 ---------- */
+.home-sec { margin-bottom: 22px; }
+.sec-toggle { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 6px; }
+.sec-toggle:hover { color: var(--text); }
+.sec-arrow { transition: transform .15s; }
+.home-sec.collapsed .sec-arrow { transform: rotate(-90deg); }
+.home-sec.collapsed .sec-body { display: none; }
+
+/* ---------- 大世界 ---------- */
+.world-card .cover.wcover { aspect-ratio: 16 / 9; object-position: center; }/* 「創建角色／創建世界」：比卡片小的虛線方塊，固定在第一個位置 */
+.char-grid > .create-card, .world-grid > .create-card { width: 96px; height: 120px; padding: 0; flex: none; }
+.create-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 13px;
+  background: transparent; border: 2px dashed var(--border); color: var(--muted); font-size: 15px; cursor: pointer; }
+.create-card:hover { border-color: var(--accent); color: var(--accent); }
+/* 桌機版：「創建」方塊獨佔左邊一欄，第二排起的卡片和第一排對齊（窄畫面照常換行，不浪費寬度） */
+@media (min-width: 761px) {
+  .char-grid, .world-grid { position: relative; padding-left: 110px; min-height: 120px; } /* 96px 方塊＋14px 間距 */
+  .char-grid > .create-card, .world-grid > .create-card { position: absolute; left: 0; top: 0; }
+}
+.create-plus { width: 40px; height: 40px; border-radius: 10px; border: 2px dashed currentColor; display: grid; place-items: center; }
+.create-plus .ic { width: 20px; height: 20px; }
+.member-row { display: flex; flex-wrap: wrap; gap: 4px; min-height: 28px; }
+.member-row .m-av { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; object-position: center 20%; font-size: 12px; border: 1px solid var(--border); }
+.member-row.big { gap: 8px; }
+.member-row.big .m-av { width: 46px; height: 46px; font-size: 18px; cursor: pointer; }
+.member-row.big .m-av:hover { border-color: var(--accent); }
+.char-detail.world-detail { padding-top: 40px; } /* 封面往下移：上方留給「編輯世界」按鈕，不會擋到封面 */
+.world-detail-cover { width: 100%; aspect-ratio: 16 / 9; max-height: 320px; object-fit: cover; border-radius: 12px; border: 1px solid var(--border); }
+.wcover-prev { width: 240px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 10px; border: 1px solid var(--border); }
+/* 世界設定：成員（虛線圓圈＋號固定在最前面） */
+.member-edit { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.add-member { width: 56px; height: 56px; border-radius: 50%; border: 2px dashed var(--border); background: transparent; color: var(--muted); padding: 0; flex: none; }
+.add-member:hover { border-color: var(--accent); color: var(--accent); }
+.add-member .ic { width: 24px; height: 24px; }
+.member-chip { display: grid; justify-items: center; gap: 4px; width: 64px; font-size: 12px; color: var(--muted); }
+.member-chip span { max-width: 64px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.member-chip .m-av { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; object-position: center 20%; border: 2px solid transparent; cursor: pointer; font-size: 20px; }
+.member-chip .m-av.selected { border-color: var(--accent); }
+.member-panel { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--bg); }
+.member-panel-head { display: flex; align-items: center; gap: 10px; }
+.member-panel-head .m-av { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; object-position: center 20%; font-size: 14px; }
+.member-panel-head button { margin-left: auto; }
+/* 世界設定 → 世界書：各成員帶來的世界書 */
+.book-member { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; border-bottom: 1px dashed var(--border); flex-wrap: wrap; }
+.book-member:last-of-type { border-bottom: none; }
+.book-who { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.book-member .m-av { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; object-position: center 20%; font-size: 13px; }
+.book-opts { display: grid; gap: 10px; flex: 1; min-width: 240px; }
+.book-block { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--bg); }
+.book-head { gap: 8px; }
+.book-entries { display: grid; gap: 2px; margin: 4px 0 0 24px; }
+.book-entries.off { opacity: .4; pointer-events: none; }
+.book-entry { font-size: 13px; gap: 8px; }
+.book-entry .ek { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 疊在對話框上方的選單 */
+.crop-box.pick-box { width: min(420px, 100%); justify-items: stretch; } /* 加上 .crop-box：不然會被後面 .crop-box 的置中蓋掉，關閉鈕跑到標題旁邊 */
+.pick-head { display: flex; align-items: center; justify-content: space-between; }
+.pick-list { display: grid; gap: 4px; max-height: 60vh; overflow-y: auto; }
+.pick-item { display: flex; align-items: center; gap: 10px; justify-content: flex-start; background: transparent; border-color: transparent; text-align: left; padding: 6px 8px; }
+.pick-item:hover { background: var(--panel2); border-color: var(--border); }
+.pick-item .m-av { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; object-position: center 20%; font-size: 14px; }
+/* 對話頁左側：所有對話／對話／世界 */
+.side-tabs { position: relative; display: flex; gap: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 2px; flex: 1; }
+.side-tabs button { position: relative; z-index: 1; flex: 1; padding: 4px 6px; font-size: 13px; border: none; background: transparent; color: var(--muted); border-radius: 6px; transition: color .2s; }
+.side-tabs button:hover { background: transparent; color: var(--text); }
+.side-tabs button.active:hover { color: var(--accent); }
+.side-tabs button.active { color: var(--accent); }
+/* 選取的底色：切換時滑到新的按鈕（動畫關閉時直接跳過去） */
+.side-pill { position: absolute; left: 0; top: 2px; bottom: 2px; width: 0; background: var(--panel2); border-radius: 6px; pointer-events: none;
+  transition: transform .22s cubic-bezier(.3, .7, .3, 1), width .22s cubic-bezier(.3, .7, .3, 1); }
+.side-pill.no-anim, html[data-motion="off"] .side-pill { transition: none; }
+#chatList .ch-world { width: 12px; height: 12px; margin-right: 3px; vertical-align: -1px; color: var(--accent); }
+
+/* 開始世界對話時的發言模式選項 */
+/* 開始大世界對話：先選取發言模式，按「開始對話」才建立 */
+.list .item.mode-pick { cursor: pointer; align-items: flex-start; gap: 10px; }
+.list .item.mode-pick input[type=radio] { margin-top: 3px; accent-color: var(--accent); }
+/* 選擇開場白：清單最多約 4 個高、可捲動；下方預覽完整內容 */
+.greet-list { max-height: 34vh; overflow-y: auto; }
+.list .item .sub.clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; }
+.greet-preview-label { margin: 4px 0 -4px; }
+.greet-preview { max-height: 42vh; min-height: 120px; overflow-y: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.greet-preview em { color: var(--muted); }
+.greet-preview q { color: var(--quote); quotes: none; font-weight: 500; }
+.list .item.mode-pick.picked { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel2)); }
+.list .item .title .tag { margin-left: 8px; vertical-align: 1px; }
+
+/* 大世界：發言列與旁白 */
+.speaker-bar { display: flex; align-items: center; gap: 6px; padding: 6px 18px; border-top: 1px solid var(--border); background: var(--panel); overflow-x: auto; scrollbar-width: thin; }
+.speaker-bar .sb-label { font-size: 12px; color: var(--muted); white-space: nowrap; margin-right: 4px; }
+.sb-btn { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border-radius: 999px; font-size: 13px; white-space: nowrap; flex: none; }
+.sb-btn:hover { border-color: var(--accent); }
+.sb-btn.absent { opacity: .45; border-style: dashed; }
+/* 世界設定 → 開場白：排版和對話頁一樣，對話框裡直接編輯 */
+.opening-chat { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: rgba(5, 9, 22, .55); }
+.opening-list { display: flex; flex-direction: column; gap: 14px; padding: 16px 14px; min-height: 160px; }
+.opening-list > .empty { margin: auto; text-align: center; line-height: 1.8; }
+.op-msg .mav { cursor: default; }
+.op-msg .mbody { cursor: text; transition: border-color .15s; }
+.op-msg .mbody:focus-within { border-color: var(--accent); }
+.op-msg.user .mbody { width: min(85%, 720px); }
+.op-msg.user .mbody:focus-within { border-color: var(--user-name); }
+.op-text { display: block; width: 100%; background: transparent !important; border: none !important; padding: 0 !important; border-radius: 0; resize: none; overflow: hidden;
+  line-height: 1.6; min-height: 1.6em; field-sizing: content; }
+/* 名字＝選單：看起來像名字，點了可以換人 */
+.op-who { width: auto; max-width: 240px; background: transparent; border: none; border-radius: 6px; padding: 0 2px; font-weight: 700; color: inherit; cursor: pointer; }
+.op-who:hover, .op-who:focus { background: var(--panel2); }
+.op-who option { background: var(--panel-solid); color: var(--text); font-weight: 400; }
+/* 角色卡的開場白：每個開場白（主要／備用）一個區塊 */
+.greet-blocks { display: grid; gap: 16px; }
+.greet-blocks > .empty { text-align: center; padding: 20px; }
+.greet-block { display: grid; gap: 6px; }
+.greet-head { display: flex; align-items: center; gap: 4px; }
+.greet-head .greet-title { font-weight: 700; font-size: 14px; }
+.greet-block.main .greet-title { color: var(--accent); }
+.greet-head button { padding: 3px 8px; font-size: 12px; background: transparent; border-color: transparent; color: var(--muted); }
+.greet-head button:hover:not(:disabled) { color: var(--text); border-color: var(--border); }
+.greet-head button:disabled { opacity: .35; }
+.greet-head .ic { width: 14px; height: 14px; }
+.greet-block .opening-list { min-height: 90px; }
+.opening-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--border); background: var(--panel); }
+.sb-btn.absent:hover { opacity: .85; }
+.sb-av { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; object-position: center 20%; font-size: 12px; flex: none; }
+.sb-auto { padding: 5px 10px; margin-left: auto; }
+.narrator-av { color: var(--muted); }
+.narrator-av .ic { width: 50%; height: 50%; }
+.msg.narrator .mbody { background: transparent; border-style: dashed; }
+.msg.narrator .mname { color: var(--muted); }
+.msg.narrator .mtext { color: #c3cde6; }
+
+/* ---------- 圖示（Lucide） ---------- */
+.ic { width: 1.1em; height: 1.1em; flex: none; vertical-align: -0.2em; }
+button:has(> .ic) { display: inline-flex; align-items: center; justify-content: center; gap: .4em; }
+button.icon > .ic, .card-edit > .ic { width: 16px; height: 16px; }
+h1 > .ic { margin-right: 8px; vertical-align: -0.15em; }
+h1 > .ic.logo { color: var(--accent); }
+#tabbar .ti { width: 22px; height: 22px; }
+summary > .ic { margin-right: 4px; color: var(--accent); }
+.mactions button > .ic { width: 13px; height: 13px; }
+.avatar-ph > .ic { width: 40%; height: 40%; color: var(--muted); }
+.spin { animation: ic-spin 1s linear infinite; }
+@keyframes ic-spin { to { transform: rotate(360deg); } }
+/* 頭像裁切（疊在對話框之上） */
+.crop-overlay { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.6); display: grid; place-items: center; padding: 16px; }
+/* 放大檢視圖片（角色介紹的封面與頭像） */
+img.zoomable { cursor: zoom-in; }
+.img-view { background: rgba(0,0,0,.82); cursor: zoom-out; overflow: hidden; touch-action: none; user-select: none; }
+.img-view.zoomed, .img-view img { cursor: grab; }
+.img-view.zoomed:active { cursor: grabbing; }
+.img-view img { max-width: min(92vw, 1200px); max-height: 90vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,.6); transform-origin: center center; will-change: transform; }
+.img-view-hint { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 12px; color: rgba(255,255,255,.75); background: rgba(0,0,0,.45); padding: 4px 12px; border-radius: 999px; pointer-events: none; white-space: nowrap; }
+.crop-box { background: var(--panel-solid); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; display: grid; gap: 12px; justify-items: center; max-width: 100%; }
+.crop-box h3 { margin: 0; font-size: 17px; justify-self: start; }
+.crop-stage { position: relative; overflow: hidden; border-radius: 10px; background: #000; cursor: grab; touch-action: none; user-select: none; }
+.crop-stage.dragging { cursor: grabbing; }
+.crop-img { position: absolute; left: 0; top: 0; max-width: none; transform-origin: 0 0; pointer-events: none; }
+/* 圓形範圍提示：圓外變暗 */
+.crop-ring { position: absolute; inset: 0; border-radius: 50%; box-shadow: 0 0 0 999px rgba(0,0,0,.45); border: 2px solid rgba(255,255,255,.8); pointer-events: none; }
+/* 九宮格：1/3、2/3 的直線與橫線，加一點陰影在亮的圖上也看得到 */
+.crop-grid { position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(to right, transparent calc(33.333% - .5px), rgba(255,255,255,.55) calc(33.333% - .5px), rgba(255,255,255,.55) calc(33.333% + .5px), transparent calc(33.333% + .5px), transparent calc(66.666% - .5px), rgba(255,255,255,.55) calc(66.666% - .5px), rgba(255,255,255,.55) calc(66.666% + .5px), transparent calc(66.666% + .5px)),
+    linear-gradient(to bottom, transparent calc(33.333% - .5px), rgba(255,255,255,.55) calc(33.333% - .5px), rgba(255,255,255,.55) calc(33.333% + .5px), transparent calc(33.333% + .5px), transparent calc(66.666% - .5px), rgba(255,255,255,.55) calc(66.666% - .5px), rgba(255,255,255,.55) calc(66.666% + .5px), transparent calc(66.666% + .5px));
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, .8)); }
+.crop-zoom { display: flex; align-items: center; gap: 8px; width: 100%; }
+.crop-zoom input { flex: 1; }
+.crop-btns { display: flex; gap: 8px; justify-self: end; }
+
+/* 設定 → 使用者 */
+.user-top { display: flex; gap: 18px; align-items: flex-start; }
+.user-top .grow { flex: 1; min-width: 0; }
+.user-av-slot { display: grid; gap: 8px; justify-items: center; }
+.user-av-prev { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; object-position: center 20%; border: 1px solid var(--border); font-size: 36px; }
+.user-av-slot .btns { display: flex; gap: 4px; }
+.mem-info { font-size: 13px; }
+
+.tabs { position: relative; display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 14px; flex-wrap: wrap; }
+.tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; transition: color .2s; }
+.tabs button.active { color: var(--accent); }
+/* 視窗裡的分頁列（角色、世界編輯）固定在最上方，不跟著下方內容捲動；
+   往上延伸蓋住視窗內距，捲動的內容才不會從分頁列上方露出來 */
+.modal-body .tabs { position: sticky; top: -16px; z-index: 3; background: var(--panel-solid); margin-top: -16px; padding-top: 16px; }
+/* 分頁的選取標示：切換時左右滑動（動畫關閉時直接跳過去） */
+.tab-ind { position: absolute; left: 0; top: 0; height: 2px; width: 0; background: var(--accent); border-radius: 2px; pointer-events: none;
+  transition: transform .22s cubic-bezier(.3, .7, .3, 1), width .22s cubic-bezier(.3, .7, .3, 1); }
+.tab-ind.no-anim, html[data-motion="off"] .tab-ind { transition: none; }
+/* 可展開的小區塊（思考過程、說明等）：高度慢慢展開／收起。不支援 ::details-content 的瀏覽器會直接切換 */
+details { interpolate-size: allow-keywords; }
+details::details-content { block-size: 0; overflow-y: clip; transition: block-size .2s ease-out, content-visibility .2s allow-discrete; }
+details[open]::details-content { block-size: auto; }
+html[data-motion="off"] details::details-content { transition: none; }
+
+.editor-top { display: grid; grid-template-columns: auto 1fr; gap: 18px; }
+.img-edit { display: flex; gap: 14px; align-items: flex-start; }
+.img-slot { display: grid; gap: 6px; justify-items: center; font-size: 12px; color: var(--muted); }
+.img-slot .cover-prev { width: 150px; height: 200px; border-radius: 10px; object-fit: cover; object-position: center top; border: 1px solid var(--border); font-size: 40px; }
+.img-slot .avatar-prev { width: 84px; height: 84px; border-radius: 50%; object-fit: cover; object-position: center 20%; border: 1px solid var(--border); font-size: 28px; }
+.img-slot .btns { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+
+.list { display: flex; flex-direction: column; gap: 6px; }
+.list .item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
+.list .item.active { border-color: var(--accent); }
+.list .item .grow { flex: 1; min-width: 0; cursor: pointer; }
+/* 世界書清單：點名稱展開，預覽條目名稱與狀態 */
+.list .wb-row { display: grid; gap: 4px; }
+.list .item .title .wb-arrow { width: 14px; height: 14px; margin-right: 4px; vertical-align: -2px; color: var(--muted); transition: transform .15s; }
+.list .item.open .title .wb-arrow { transform: rotate(90deg); }
+.list .item.open { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.wb-entries { margin-left: 30px; display: grid; gap: 3px; max-height: 280px; overflow-y: auto; padding-right: 4px; }
+.wb-entry { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--panel2) 60%, transparent); font-size: 13px; }
+.wb-entry .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-entry .b { display: flex; gap: 4px; flex-shrink: 0; }
+.wb-entry.off .t { color: var(--muted); }
+.list .item .wb-global { display: flex; align-items: center; padding: 4px; cursor: pointer; } /* 世界書清單：全域啟用的勾選框（點擊範圍大一點） */
+.list .item .wb-global input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.list .item .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .item .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.entry { border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); }
+.entry > summary { padding: 8px 12px; cursor: pointer; display: flex; gap: 8px; align-items: center; list-style: none; }
+.entry > summary::-webkit-details-marker { display: none; }
+.entry > summary .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry .entry-body { padding: 0 12px 12px; }
+/* 世界書條目：搜尋欄＋一行可橫向捲動的標籤，下方只顯示選中的條目 */
+.wi-help > summary { cursor: pointer; font-size: 13px; color: var(--muted); width: fit-content; }
+.wi-help[open] > summary { margin-bottom: 6px; }
+.form input.wi-search, input.wi-search { width: 100%; padding: 5px 9px; font-size: 13px; } /* 和對話清單的搜尋框一樣小 */
+.wi-strip { display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; padding-bottom: 6px; scrollbar-width: thin; }
+/* 最小寬度＝放得下「啟用／常駐／深度 N」三個標籤：切換常駐、插入位置時寬度不會跳動 */
+.wi-chip { position: relative; flex: 0 0 auto; min-width: 150px; max-width: 220px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); color: inherit; text-align: left; cursor: pointer; font-size: 14px; }
+.wi-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wi-chip .t { max-width: 100%; padding-right: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.wi-chip .wi-x { position: absolute; top: 3px; right: 4px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 6px; background: none;
+  color: var(--muted); font-size: 15px; line-height: 20px; cursor: pointer; }
+.wi-chip .wi-x:hover { color: #fff; background: var(--danger); }
+.wi-chip .b { display: flex; gap: 4px; white-space: nowrap; }
+.wi-chip:hover { border-color: var(--accent); }
+.wi-chip.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.wi-chip.off .t { opacity: .55; }
+.wi-chip.wi-add { position: sticky; right: 0; min-width: 0; justify-content: center; align-items: center; flex-direction: row; color: var(--accent); background: var(--panel2); box-shadow: -8px 0 8px -2px rgba(0, 0, 0, .45); }
+.wi-none { align-self: center; padding: 0 8px; white-space: nowrap; font-size: 13px; }
+.wi-editor .entry .entry-body { padding: 12px; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 6px; background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+.badge.on { color: var(--accent); border-color: var(--accent); }
+
+.prompt-msg { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+.prompt-msg .role { padding: 4px 10px; font-size: 12px; background: var(--panel2); border-bottom: 1px solid var(--border); color: var(--accent); }
+.prompt-msg pre { margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13px; max-height: 300px; overflow: auto; }
+
+#toast { position: fixed; bottom: calc(var(--tabbar-h) + 16px); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; z-index: 100; pointer-events: none; }
+#toast div { background: var(--panel2); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+#toast div.err { border-color: var(--danger); color: #ffb3b3; }
+
+.only-mobile { display: none !important; }
+@media (max-width: 760px) {
+  .only-mobile { display: inline-flex !important; }
+  #tabbar { padding: 0; }
+  #sidebar { position: fixed; inset: 0 auto var(--tabbar-h) 0; z-index: 40; background: var(--panel-solid); width: 85vw; max-width: 320px; transform: translateX(-100%); transition: transform .2s; }
+  #sidebar.open { transform: none; box-shadow: 0 0 30px rgba(0,0,0,.6); }
+  .editor-top { grid-template-columns: 1fr; }
+  .mactions { opacity: 1; }
+  .msg .mav { width: 34px; height: 34px; }
+  .status { display: none; }
+  .topbar { padding: 10px 12px; }
+  .home-main { padding: 14px 12px 40px; }
+  .char-grid, .world-grid { gap: 10px; }
+  .char-grid > .card:not(.create-card) { width: 150px; }
+  .char-grid .c-actions button { font-size: 12px; padding: 5px 4px; }
+  .char-grid .c-actions button .ic { display: none; } /* 窄螢幕的小卡片：只留文字 */
+  .world-grid > .card:not(.create-card) { width: min(250px, 100%); }
+  #composer { padding: 6px 10px 8px; }
+  .composer-top .as-who { width: 110px; }
+  .composer-top #btnContinue { margin-left: auto; } /* token 紀錄在窄螢幕隱藏：按鈕照樣靠右 */
+  .composer-main > .primary, .composer-main > .danger { width: 70px; }
+}

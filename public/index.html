@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI酒館－by 葛恩 with Claude</title>
+  <!-- 視窗與工作列的圖示（由 assets/icon.svg 產生：npm run icon） -->
+  <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
+  <link rel="icon" type="image/png" sizes="256x256" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ========== 首頁：角色卡 ========== -->
+  <div id="homeView" class="view">
+    <header class="topbar">
+      <h1><i data-icon="beer" class="logo"></i>AI 酒館</h1>
+      <input id="charSearch" type="search" placeholder="搜尋角色或標籤…">
+      <label class="model-pick home-sort" title="角色與世界卡片的排列順序（記在這台電腦）"><i data-icon="arrow-up-down"></i><select id="homeSort" aria-label="排序方式"></select></label>
+      <div class="topbar-actions">
+        <button id="btnImport" title="匯入 PNG / JSON 角色卡（也可直接拖放檔案）"><i data-icon="import"></i>匯入</button>
+        <button id="btnWorlds"><i data-icon="book-open"></i>世界書</button>
+      </div>
+      <input type="file" id="fileImport" accept=".png,.json,application/json,image/png" multiple hidden>
+    </header>
+    <main class="home-main">
+      <!-- 兩個欄位都可以收合（點標題） -->
+      <section class="home-sec" data-sec="chars">
+        <h2 class="section-title sec-toggle"><i data-icon="chevron-down" class="sec-arrow"></i>角色 <span id="charCount" class="muted"></span></h2>
+        <div id="charGrid" class="char-grid sec-body"></div>
+      </section>
+      <section class="home-sec" data-sec="worlds">
+        <h2 class="section-title sec-toggle"><i data-icon="chevron-down" class="sec-arrow"></i>世界 <span id="worldCount" class="muted"></span></h2>
+        <div id="worldGrid" class="world-grid sec-body"></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ========== 對話頁 ========== -->
+  <div id="chatView" class="view" hidden>
+    <aside id="sidebar">
+      <div class="side-top">
+        <div id="sideTabs" class="side-tabs">
+          <button data-filter="all" class="active">所有對話</button>
+          <button data-filter="char">對話</button>
+          <button data-filter="world">世界</button>
+        </div>
+        <button id="btnCloseSide" class="icon only-mobile" title="關閉"><i data-icon="x"></i></button>
+      </div>
+      <input id="chatSearch" type="search" placeholder="搜尋對話或角色…">
+      <ul id="chatList"></ul>
+      <div class="side-foot">
+        <button id="btnPreview" title="檢視組裝後的提示詞"><i data-icon="file-text"></i>提示詞</button>
+        <button id="btnWorlds2"><i data-icon="book-open"></i>世界書</button>
+      </div>
+    </aside>
+
+    <main id="main">
+      <header id="chatHead">
+        <button id="btnOpenSide" class="icon only-mobile" title="對話紀錄"><i data-icon="menu"></i></button>
+        <div class="head-info">
+          <div id="chatTitle" class="chat-title" title="點擊重新命名"></div>
+          <div id="chatSub" class="chat-sub"></div>
+        </div>
+        <label class="model-pick think-pick"><i data-icon="brain"></i><span class="pick-label">思考：</span><select id="thinkPick" aria-label="思考程度"></select></label>
+        <label class="model-pick" title="選擇模型設定檔（設定 → API 設定 → 模型設定檔）"><i data-icon="bot"></i><select id="modelPick"></select></label>
+        <button id="btnChatSettings" class="small" title="只對這段對話有效的設定：聊天紀錄上限、記憶、清空聊天…"><i data-icon="sliders-horizontal"></i>對話設定</button>
+      </header>
+
+      <div id="messages"></div>
+
+      <!-- 大世界（輪流發言）：點頭像讓那個角色發言；生成中點別人＝插話 -->
+      <div id="speakerBar" class="speaker-bar" hidden></div>
+
+      <!-- 輸入區：上排「身分選單（貼齊輸入框左側）｜token 紀錄｜繼續、只加入」，下排「輸入框（佔滿寬度）｜送出」 -->
+      <footer id="composer">
+        <div class="composer-top">
+          <!-- 用誰的身分說話：你的角色／你寫的旁白／你扮演的 NPC（NPC 名單存在這段對話） -->
+          <label for="asWho" class="as-who-label">扮演角色：</label>
+          <select id="asWho" class="as-who" title="用誰的身分說話：你的角色、你自己寫的旁白，或你扮演的 NPC"></select>
+          <div id="status" class="status" title="上一次送出的提示詞資訊"></div>
+          <button id="btnContinue" class="small" title="接續最後一則回應"><i data-icon="chevrons-right"></i>繼續</button>
+          <button id="btnAddOnly" class="small" title="只加入這則訊息、不讓 AI 回應（Alt+Enter）"><i data-icon="plus"></i>只加入</button>
+        </div>
+        <div class="composer-main">
+          <textarea id="input" rows="1" placeholder="輸入訊息…（Enter 送出，Shift+Enter 換行）"></textarea>
+          <button id="btnSend" class="primary"><i data-icon="send"></i>送出</button>
+          <button id="btnStop" class="danger" hidden><i data-icon="square"></i>停止</button>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ========== 設定頁 ========== -->
+  <div id="settingsView" class="view" hidden>
+    <header class="topbar"><h1><i data-icon="settings"></i>設定</h1></header>
+    <main class="settings-main">
+      <div id="settingsBody"></div>
+      <div id="settingsFoot" class="settings-foot"></div>
+    </main>
+  </div>
+
+  <!-- ========== 底部快速切換欄 ========== -->
+  <nav id="tabbar">
+    <button data-tab="home"><i data-icon="house" class="ti"></i><span>首頁</span></button>
+    <button data-tab="chat"><i data-icon="message-circle" class="ti"></i><span>對話</span></button>
+    <button data-tab="settings"><i data-icon="settings" class="ti"></i><span>設定</span></button>
+  </nav>
+
+  <!-- 通用對話框：只能用 ✕、取消或儲存關閉 -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2 id="modalTitle"></h2>
+        <button class="icon" data-close title="關閉"><i data-icon="x"></i></button>
+      </div>
+      <div id="modalBody" class="modal-body"></div>
+      <div id="modalFoot" class="modal-foot"></div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+  <script src="icons.js"></script>
+  <!-- 前端程式依序載入（共用同一個全域範圍），main.js 最後啟動 -->
+  <script src="js/core.js"></script>
+  <script src="js/home.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/chat.js"></script>
+  <script src="js/settings.js"></script>
+  <script src="js/editors.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

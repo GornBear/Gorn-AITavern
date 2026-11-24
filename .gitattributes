@@ -1,0 +1,9 @@
+# 換行：儲存庫裡一律 LF；Windows 的批次檔一律 CRLF（cmd.exe 遇到 LF 偶爾會讀錯）
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cs text eol=crlf
+
+# 二進位檔
+*.exe binary
+*.ico binary
+*.png binary

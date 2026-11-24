@@ -1,0 +1,25 @@
+{
+  "name": "ai-tavern",
+  "version": "1.5.0",
+  "description": "本機 AI 酒館：角色卡聊天、世界書、串流輸出",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node launch.js",
+    "server": "node server.js",
+    "test": "node test/run.js",
+    "icon": "node tools/make-icon.js",
+    "build-launcher": "node tools/build-launcher.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GornBear/Gorn-AiTavern.git"
+  }
+}

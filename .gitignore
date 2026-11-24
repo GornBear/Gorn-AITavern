@@ -1,0 +1,20 @@
+# API 金鑰與個人設定 —— 絕對不要提交
+config.json
+.env
+.env.*
+
+# 玩家存檔（角色、聊天紀錄、世界、世界書、設定、金鑰、備份）
+userdata/
+
+# 程式執行時的快取（應用程式視窗的瀏覽器設定檔、視窗位置、啟動紀錄與選擇）
+data/
+
+# 內附的 Node.js（約 95 MB，在設定頁「資料 → 內附的 Node.js」建立）
+runtime/node.exe
+
+node_modules/
+*.log
+*.tmp
+
+# Claude Code 的本機設定（個人權限設定，不放進版本）
+.claude/settings.local.json

@@ -1,0 +1,11 @@
+{
+  "openai": {
+    "api_key": "OpenAI 相容 API 的金鑰（本機模型可留空）"
+  },
+  "gemini": {
+    "api_key": "Google Gemini API 金鑰（AIza 開頭）"
+  },
+  "anthropic": {
+    "api_key": "Anthropic API 金鑰"
+  }
+}
