@@ -377,10 +377,14 @@ async function openChatSettings() {
   if (own && !HISTORY_CAP_OPTS.some(([v]) => String(v) === own)) capSel.append(h('option', { value: own }, `自訂：${fmtCap(+own)}`));
   capSel.value = own;
   const usage = h('p', { class: 'muted small-note' }, '計算目前的用量…');
+  const room = h('p', { class: 'small-note ctx-room' });
   const refreshUsage = async () => {
     const r = await api('POST', '/api/prompt-preview', { char_id: charId, chat_id: chatId });
     usage.textContent = `目前每次送出約 ${r.info.tokens} tokens（聊天紀錄 ${r.info.history_used}/${r.info.history_total} 則`
       + (r.info.memory_cut ? `，前 ${r.info.memory_cut} 則已壓縮進記憶` : '') + `）｜套用中的上限：${fmtCap(r.info.history_cap)}`;
+    const t = roomText(r.info);
+    room.textContent = t.text;
+    room.classList.toggle('warn', t.warn);
   };
   capSel.onchange = async () => {
     try {
@@ -548,10 +552,11 @@ async function openChatSettings() {
     h('p', { class: 'muted small-note' }, '這裡的設定只對這段對話有效，其他對話不受影響。'),
     h('fieldset', {}, h('legend', {}, '生成與上下文'),
       h('div', { class: 'row cs-grid' }, ctxField, h('label', {}, h('span', {}, '聊天紀錄最多送多少 tokens'), capSel), tempField, lenField, thinkField),
-      usage,
+      usage, room,
       h('div', { class: 'muted small-note cs-help' },
         h('p', {}, '留空＝跟隨目前的模型設定（標題列選的模型設定檔，或「設定 → API 設定」）。'),
-        h('p', {}, h('b', {}, '上下文長度：'), 'AI 一次能看到的總量。包含：系統提示、角色卡、世界書、你的人設、記憶、聊天紀錄，加上留給回覆的長度。請配合模型能力設定；超過模型的上限會被拒絕或截斷。'),
+        h('p', {}, h('b', {}, '上下文長度：'), 'AI 一次能看到的總量。包含：系統提示、角色卡、世界書、你的人設、記憶、聊天紀錄，加上留給回覆的長度。請配合模型能力設定；超過模型的上限會被拒絕或截斷。'
+          + '使用本機小模型（LM Studio、Ollama 等）時，不要超過載入模型時設定的長度；出錯、變得很慢或回覆被截斷時，請調小上下文長度。'),
         h('p', {}, h('b', {}, '聊天紀錄最多送多少 tokens：'), '只限制「聊天紀錄」。上下文長度扣掉其他內容後，剩下的空間才會給聊天紀錄。調低可以節省 Token、加快速度，建議將更早的劇情交給記憶。預設值在「提示詞設定 → 記憶與上下文壓縮」。'),
         h('p', {}, h('b', {}, '創意發散度：'), '越高越有變化，越低越平穩、貼近設定。'),
         h('p', {}, h('b', {}, '回覆長度：'), '上下文裡預留給回覆的空間，影響回覆最多寫多長。模型的思考也會算在裡面。'),
@@ -1325,6 +1330,21 @@ const overflowWarned = new Set(); // 這次開程式已經提醒過「提示詞�
 /** 提示詞太長的說明：固定的部分（不含聊天紀錄）就超過上下文長度 */
 const overflowText = inf => `⚠ 提示詞太長：系統提示、角色設定、世界書與記憶，加上預留的回應長度，已經超過上下文長度（${inf.context_tokens} tokens）約 ${inf.overflow} tokens。`
   + '這時只會送出最後一則訊息，AI 看不到前面的對話，API 也可能直接報錯。可以到「設定 → API 設定」調大上下文長度或調小最大回應，或精簡角色描述、世界書與記憶。';
+const fmtK = v => (v >= 1000 ? `${(v / 1000).toFixed(v < 10000 ? 1 : 0).replace(/\.0$/, '')}k` : String(v));
+/**
+ * 聊天紀錄實際有多少空間：上下文長度扣掉系統提示、角色卡、世界書、記憶與預留的回應後剩下的，
+ * 比聊天紀錄上限小時（例如大世界角色很多），提醒上限送不滿、要調大上下文長度
+ */
+function roomText(inf) {
+  if (inf.overflow > 0) return { text: overflowText(inf), warn: true };
+  const cap = inf.history_cap || 0, room = inf.history_room ?? 0, ctx = inf.context_tokens;
+  if (cap > 0 && room < cap) {
+    const need = Math.ceil((ctx + cap - room) / 1000) * 1000;
+    return { warn: true, text: `⚠ 系統提示、角色設定、世界書、記憶與預留的回應約佔 ${fmtK(ctx - room)} tokens，聊天紀錄只剩約 ${fmtK(room)}，送不滿上限 ${fmtCap(cap)}。`
+      + `模型支援的話，可以把上下文長度調到 ${fmtK(need)} 以上；不支援就維持現狀（較舊的對話會整理進記憶）。` };
+  }
+  return { warn: false, text: `聊天紀錄的空間足夠：扣掉其他內容後還有約 ${fmtK(room)} tokens` + (cap > 0 ? `，上限 ${fmtCap(cap)} 送得滿。` : '（沒有設定上限）。') };
+}
 async function openPreview() {
   try {
     const r = await api('POST', '/api/prompt-preview', { char_id: state.char.id, chat_id: state.chatId });

@@ -829,12 +829,13 @@ function rawReq(method, url, headers = {}, body) {
         const store = require(path.join(PROJ, 'lib/storage.js'));
         const SF = path.join(TD, 'settings.json'), orig = fs.readFileSync(SF, 'utf8');
         // 模擬舊版的資料：沒有 temperature、max_tokens，也還沒處理過
-        const raw = JSON.parse(orig); delete raw.temperature; delete raw.max_tokens; delete raw.pinned_defaults;
+        const raw = JSON.parse(orig); delete raw.temperature; delete raw.max_tokens; delete raw.context_tokens; delete raw.pinned_defaults;
         fs.writeFileSync(SF, JSON.stringify(raw));
         const pinned = store.pinChangedDefaults();
         const after = JSON.parse(fs.readFileSync(SF, 'utf8'));
         ok(DEFAULT_SETTINGS.temperature === 0.7 && DEFAULT_SETTINGS.max_tokens === 8192 && pinned.includes('temperature') && pinned.includes('max_tokens')
           && after.temperature === 0.9 && after.max_tokens === 4096, '預設 Temperature 0.7、最大回應 8192；舊資料沒存這些值時保留原本的 0.9、4096', JSON.stringify(after.pinned_defaults));
+        ok(DEFAULT_SETTINGS.context_tokens === 64000 && pinned.includes('context_tokens') && after.context_tokens === 32000, '預設上下文長度 64000；舊資料沒存時保留原本的 32000');
         ok(store.pinChangedDefaults().length === 0, '已經處理過就不再改動');
         // 之後自己改回新的預設（不會存進設定檔）：下次啟動不會又被改回舊值
         const reset = JSON.parse(fs.readFileSync(SF, 'utf8')); delete reset.temperature;
@@ -869,7 +870,7 @@ function rawReq(method, url, headers = {}, body) {
   r = await j('POST', '/api/profiles', { name: 'bad', fields: { retry_max: 2.5 } });
   ok(r.status === 400, '新設定檔的整數欄位是小數：拒絕（和設定 API 一致）', r.status);
   r = await j('POST', `/api/profiles/${pA}/apply`);
-  ok(r.data.settings.openai.model === 'mock-a' && r.data.settings.context_tokens === 32000 && r.data.active === pA, '切換設定檔：模型與生成參數一起切換', JSON.stringify({ m: r.data.settings.openai.model, c: r.data.settings.context_tokens }));
+  ok(r.data.settings.openai.model === 'mock-a' && r.data.settings.context_tokens === 64000 && r.data.active === pA, '切換設定檔：模型與生成參數一起切換', JSON.stringify({ m: r.data.settings.openai.model, c: r.data.settings.context_tokens }));
   await j('GET', '/api/models');
   ok(authLog().endsWith('Bearer KEY_PROFILE_A'), '切換設定檔：金鑰也換成它存的那一把');
   await j('PUT', '/api/settings', { temperature: 0.55 }); // 使用中的設定檔跟著更新
@@ -1364,6 +1365,13 @@ function rawReq(method, url, headers = {}, body) {
   // 聊天紀錄放不下時，舊訊息以 8 則為單位捨棄
   const { buildPrompt } = require(path.join(PROJ, 'lib/prompt.js'));
   const longHist = Array.from({ length: 50 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: '訊息'.repeat(40) + i }));
+  {
+    // 聊天紀錄實際的空間：上下文長度扣掉固定部分後剩下的（還沒套用上限）；上限比它大時送不滿
+    const big = 'x'.repeat(4000);
+    const a = buildPrompt({ card: { name: 'A', description: big }, history: [{ role: 'user', content: 'hi' }], settings: { context_tokens: 8000, max_tokens: 1000, history_cap: 32000, user_name: 'U' }, books: [] }).info;
+    const b = buildPrompt({ card: { name: 'A' }, history: [{ role: 'user', content: 'hi' }], settings: { context_tokens: 8000, max_tokens: 1000, history_cap: 32000, user_name: 'U' }, books: [] }).info;
+    ok(a.history_room > 0 && a.history_room < b.history_room && b.history_room <= 7000 && a.history_room >= a.history_budget, '回報聊天紀錄實際的空間（角色設定越長越少）', JSON.stringify({ a: a.history_room, b: b.history_room }));
+  }
   const used = n => buildPrompt({ card: { name: 'A' }, history: longHist.slice(0, n), settings: { context_tokens: 2000, max_tokens: 200, user_name: 'U' }, books: [] }).info.history_used;
   const u1 = used(40), u2 = used(41);
   ok((40 - u1) % 8 === 0 && (41 - u2) % 8 === 0 && u1 > 0, '聊天紀錄以 8 則為單位捨棄', `${u1} / ${u2}`);

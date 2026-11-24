@@ -453,6 +453,8 @@ q { quotes: none; }
 .tok { font-size: 12px; color: var(--muted); text-align: right; }
 .tok.warn { color: var(--danger); }
 .small-note { font-size: 12px; margin: 0; }
+.ctx-room { color: var(--muted); margin-top: 4px; }
+.ctx-room.warn { color: var(--danger); }
 /* 使用者分頁最底下的頁尾：程式名稱、作者與版本 */
 .app-credit { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--muted); letter-spacing: .3px; }
 /* 設定檔損毀：固定在畫面上方的提示，按「×」才關掉 */

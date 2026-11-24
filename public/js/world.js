@@ -192,7 +192,25 @@ async function openBigWorldEditor(id, { back } = {}) {
     const custom = h('textarea', { rows: 7, placeholder: '只保留會影響角色扮演的規則（例如角色的行為準則、禁忌、口癖），刪掉只影響文字描寫手法的部分。' });
     const customLabel = h('span', {});
     const customNote = h('span', { class: 'muted small-note' });
-    const customWrap = h('label', {}, customLabel, custom, customNote);
+    const customTok = h('div', { class: 'tok' });
+    const customWrap = h('label', {}, customLabel, custom, customTok, customNote);
+    // 這位角色發言時，角色卡佔多少：設定、個性、台詞範例（大世界不送開場白與情境）＋目前套用的系統提示＋公開資訊
+    const memTok = h('div', { class: 'detail-tokens member-tokens' });
+    const nameSub = s => String(s || '').replace(/{{char}}|<BOT>/gi, c.name || '').replace(/{{user}}|<USER>/gi, state.settings?.user_name || 'User');
+    const updTok = () => {
+      customTok.textContent = `約 ${estTok(custom.value)} tokens`;
+      const cd = cardCache[m.id]?.data;
+      if (!cd) { memTok.textContent = '計算 token…'; loadCard(m.id).then(() => cardCache[m.id]?.data && updTok()).catch(() => (memTok.textContent = '')); return; }
+      const core = ['description', 'personality', 'mes_example'].reduce((s, k) => s + estTok(nameSub(cd[k])), 0);
+      const sys = mode.value === 'none' ? 0 : estTok(nameSub(custom.value));
+      const pubT = estTok(m.public_info || '');
+      const n = x => x.toLocaleString();
+      const part = (label, v) => h('span', { class: 'dt-part' }, label, ' ', h('b', {}, n(v)));
+      memTok.replaceChildren(h('span', { class: 'dt-total' }, icon('file-text'), `發言時約 ${n(core + sys)} tokens`),
+        part('角色設定', core), part('系統提示', sys), part('公開資訊', pubT));
+      memTok.title = '估算值，實際數字依模型而不同。\n發言時：這位角色說話的那次呼叫會送出的角色卡內容（角色設定、個性、台詞範例＋目前套用的系統提示）。\n'
+        + '公開資訊：其他角色發言時都會看到，角色越多加起來越多。\n內嵌世界書的條目要觸發時才送，不算在裡面。';
+    };
     const syncCustom = async () => {
       const v = mode.value;
       customWrap.hidden = v === 'none';
@@ -207,6 +225,7 @@ async function openBigWorldEditor(id, { back } = {}) {
         customLabel.textContent = '自訂的角色卡規則';
         customNote.textContent = '只會套用這裡的內容。切回「完整套用」會重新帶入角色卡的完整系統提示（這裡的修改會被捨棄）。';
       }
+      updTok();
     };
     custom.oninput = () => {
       if (mode.value !== 'custom') {
@@ -215,6 +234,7 @@ async function openBigWorldEditor(id, { back } = {}) {
         customNote.textContent = '已自動改成「自訂」：只會套用這裡的內容。切回「完整套用」會重新帶入角色卡的完整系統提示（這裡的修改會被捨棄）。';
       }
       m.sys_custom = custom.value;
+      updTok();
     };
     mode.onchange = async () => {
       m.sys_mode = mode.value;
@@ -230,11 +250,13 @@ async function openBigWorldEditor(id, { back } = {}) {
       h('label', {}, h('span', {}, '角色卡的系統提示'), mode),
       h('p', { class: 'muted small-note' }, '角色卡的系統提示有些是角色扮演規則（會影響行為），有些只是文字描寫手法（可能和其他角色衝突）。大世界會讀取角色的設定、個性與台詞範例，不會放入角色的開場白與情境。'),
       customWrap,
+      memTok,
       (() => {
         // 公開資訊：輪流發言時，其他角色對這個角色只知道這些
         const pub = h('textarea', { rows: 3, value: m.public_info || '', placeholder: `例：${c.name} 的外表、身分、大家都知道的事。留空時，其他角色只知道名字與劇情中看到的言行。` });
-        pub.oninput = () => (m.public_info = pub.value);
-        return h('label', {}, h('span', {}, `公開資訊（其他角色對 ${c.name} 的了解）`), pub,
+        const pubTok = h('div', { class: 'tok' }, `約 ${estTok(pub.value)} tokens`);
+        pub.oninput = () => { m.public_info = pub.value; pubTok.textContent = `約 ${estTok(pub.value)} tokens`; updTok(); };
+        return h('label', {}, h('span', {}, `公開資訊（其他角色對 ${c.name} 的了解）`), pub, pubTok,
           h('span', { class: 'muted small-note' }, '輪流發言時，每個角色只拿到自己的完整角色卡，其他角色只看得到這裡寫的內容，避免知道別人卡裡才有的秘密。'));
       })()));
   };
