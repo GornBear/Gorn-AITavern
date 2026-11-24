@@ -165,4 +165,4 @@ tools/             產生圖示（make-icon.js）、編譯啟動程式（build-l
 
 ## 授權
 
-MIT License，詳見 [LICENSE](LICENSE)。介面圖示來自 [Lucide](https://lucide.dev)（ISC 授權）。
+MIT License，詳見 [LICENSE](LICENSE)。介面圖示來自 [Lucide](https://lucide.dev)（ISC 授權）；第三方元件的授權見 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

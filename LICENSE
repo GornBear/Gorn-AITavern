@@ -19,12 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party notices
-
-- Interface icons (public/icons.js) are from Lucide (https://lucide.dev),
-  ISC License, Copyright (c) Lucide Contributors.
-- @anthropic-ai/sdk is installed from npm (Apache License 2.0); it is not
-  included in this repository.
