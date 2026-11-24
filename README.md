@@ -1,13 +1,13 @@
 # 🍺 AI 酒館
 
-[![下載 Windows 版](https://img.shields.io/badge/%E4%B8%8B%E8%BC%89-Windows%20%E7%89%88-2ea44f?style=for-the-badge&logo=github)](https://github.com/GornBear/Gorn-AiTavern/releases/latest)
-
 在本機執行的 AI 角色扮演聊天程式，類似 SillyTavern：基於 Node.js 的小型伺服器加上瀏覽器介面。
 簡單方便的圖形化介面，不用準備複雜的指令，輕鬆匯入、編輯角色卡，跟喜歡的角色聊天。
 連接自己的 API，不用受其他聊天網站供應商限制，可以接本地自架 AI，也能使用常見的 API（OpenAI 相容格式、Gemini、Claude）。
 （本軟體使用 [Claude Code](https://claude.com/claude-code) 開發）
 
 > 預設提示詞允許成人內容，僅供成年人使用。
+
+[![下載 Windows 版](https://img.shields.io/badge/%E4%B8%8B%E8%BC%89-Windows%20%E7%89%88-2ea44f?style=for-the-badge&logo=github)](https://github.com/GornBear/Gorn-AiTavern/releases/latest)
 
 ## 啟動
 
