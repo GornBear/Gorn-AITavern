@@ -625,7 +625,9 @@ async function openSettings() {
         openSettings().catch(fail);
       } }, ic('trash-2', '刪除')) : null),
     perNote = h('p', { class: 'muted small-note' },
-      `目前使用「${activePersona.name}」：換頭像會直接更新這個設定檔；改了名字或人設，按右方的「儲存」或最下方的「儲存設定」都會一起更新。改過還沒儲存時，選單會顯示「已修改」；再選一次這個設定檔就會載回它存的內容。名字不能空白；設定檔全部刪光時，會自動還原預設的「User」。`));
+      `目前使用「${activePersona.name}」：換頭像會直接更新這個設定檔；改了名字或人設，按右方的「儲存」或最下方的「儲存設定」都會一起更新。改過還沒儲存時，選單會顯示「已修改」；再選一次這個設定檔就會載回它存的內容。名字不能空白；設定檔全部刪光時，會自動還原預設的「User」。`),
+    h('p', { class: 'small-note persona-tip' }, '新對話開始時會固定使用當時的使用者設定檔：之後在這裡切換，不會影響已經開始的對話（要換請到那段對話的「對話設定」，名字會一起改好）。'
+      + '設定檔裡的名字不建議經常更改：開場白與舊訊息裡已經寫好的名字不會跟著變，用這個設定檔的對話會出現前後不同的名字；想換身分時建議另存一個新的設定檔。'));
 
   const userPane = h('div', { class: 'form' },
     personaBox,
@@ -707,6 +709,13 @@ async function openSettings() {
       world_ids: worldChecks.map(l => $('input', l)).filter(i => i.checked).map(i => i.value),
       appearance: { ...ap },
     };
+    // 改了使用中設定檔的名字：用它的對話裡，開場白與舊訊息寫的還是舊名字，先提醒
+    if (user.user_name && !personaNew && activePersona.id && user.user_name !== activePersona.user_name) {
+      const used = (await api('GET', '/api/chats').catch(() => [])).filter(c => c.persona_id === activePersona.id).length;
+      if (used && !await askConfirm(`把使用者設定檔「${activePersona.name}」的名字從「${activePersona.user_name}」改成「${user.user_name}」？\n\n`
+        + `有 ${used} 段對話使用這個設定檔：它們之後會用新名字，但開場白、舊訊息與記憶裡寫的還是「${activePersona.user_name}」，對話中會出現前後不同的名字。\n\n`
+        + '只是想用另一個身分的話，建議改按「另存新設定檔」。')) throw Object.assign(new Error('已取消：名字沒有改'), { cancelled: true });
+    }
     if (only === 'model') patch = Object.fromEntries(PROFILE_FIELDS.map(k => [k, patch[k]]));
     else if (only === 'user') patch = { user_name: patch.user_name, user_persona: patch.user_persona };
     const r = await api('PUT', '/api/settings', patch);

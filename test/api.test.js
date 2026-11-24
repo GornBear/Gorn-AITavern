@@ -1198,7 +1198,32 @@ function rawReq(method, url, headers = {}, body) {
   ok(r.data.persona_id === psA, '對話設定：這段對話指定使用者設定檔');
   r = await j('POST', '/api/prompt-preview', { char_id: id, chat_id: tcid2 });
   ok(r.data.messages[0].content.includes('[騎士 的人設]\nPERSONA_KNIGHT2'), '這段對話用那個設定檔的名字與人設');
-  ok(!(await j('POST', '/api/prompt-preview', { char_id: id, chat_id: tcid })).data.messages[0].content.includes('PERSONA_KNIGHT'), '其他對話照樣用設定頁的');
+  {
+    // 其他對話不受影響：建立時固定的設定檔（psDef：騎士／PERSONA_KNIGHT），設定頁已經切到「旅人」也一樣
+    const other = (await j('POST', '/api/prompt-preview', { char_id: id, chat_id: tcid })).data.messages[0].content;
+    ok(!other.includes('PERSONA_KNIGHT2') && other.includes('PERSONA_KNIGHT') && (await j('GET', `/api/characters/${id}/chats/${tcid}`)).data.persona_id === psDef,
+      '其他對話用自己固定的設定檔，不跟著設定頁切換');
+    // 新對話：固定當時使用中的設定檔
+    const nc = (await j('POST', `/api/characters/${id}/chats`, {})).data;
+    ok(nc.persona_id === psB, '新對話開始時固定使用中的使用者設定檔', nc.persona_id);
+    // 自訂這段對話的名字（沒有同時指定設定檔）：改用自訂的，不被固定的設定檔蓋過
+    r = await j('PUT', `/api/characters/${id}/chats/${nc.id}`, { user_name: '臨時名' });
+    ok(!('persona_id' in r.data) && r.data.user_name === '臨時名', '自訂名字時不再固定設定檔');
+    // 舊版的對話（沒有 persona_id）：一次性固定到目前使用中的；自訂名字的不動、對話清單的順序不變
+    const store = require(path.join(PROJ, 'lib/storage.js'));
+    const nc2 = (await j('POST', `/api/characters/${id}/chats`, {})).data;
+    const file = id2 => fs.readdirSync(path.join(TD, 'char')).map(d => path.join(TD, 'char', d, 'chats', id2 + '.json')).find(p => fs.existsSync(p));
+    const f2 = file(nc2.id), raw = JSON.parse(fs.readFileSync(f2, 'utf8'));
+    delete raw.persona_id; fs.writeFileSync(f2, JSON.stringify(raw));
+    const SF = path.join(TD, 'settings.json'), sraw = JSON.parse(fs.readFileSync(SF, 'utf8'));
+    delete sraw.chat_persona_pinned; fs.writeFileSync(SF, JSON.stringify(sraw)); store.clearCaches();
+    const n = store.pinChatPersonas();
+    const after = JSON.parse(fs.readFileSync(f2, 'utf8')), custom = JSON.parse(fs.readFileSync(file(nc.id), 'utf8'));
+    ok(n >= 1 && after.persona_id === psB && after.updated === raw.updated && !custom.persona_id && custom.user_name === '臨時名',
+      '舊版的對話：固定到使用中的設定檔（自訂名字的不動、不改更新時間）', JSON.stringify({ n, p: after.persona_id }));
+    ok(store.pinChatPersonas() === 0 && JSON.parse(fs.readFileSync(SF, 'utf8')).chat_persona_pinned === true, '只做一次');
+    await j('DELETE', `/api/characters/${id}/chats/${nc.id}`); await j('DELETE', `/api/characters/${id}/chats/${nc2.id}`);
+  }
   r = await j('PUT', `/api/characters/${id}/chats/${tcid2}`, { persona_id: 'nope' });
   ok(r.status === 404, '指定不存在的使用者設定檔：拒絕');
   r = await j('PUT', '/api/settings', { personas: [] });

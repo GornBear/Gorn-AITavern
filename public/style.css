@@ -453,6 +453,7 @@ q { quotes: none; }
 .tok { font-size: 12px; color: var(--muted); text-align: right; }
 .tok.warn { color: var(--danger); }
 .small-note { font-size: 12px; margin: 0; }
+.persona-tip { color: var(--text); background: rgba(127, 160, 255, 0.08); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px; }
 .ctx-room { color: var(--muted); margin-top: 4px; }
 .ctx-room.warn { color: var(--danger); }
 /* 使用者分頁最底下的頁尾：程式名稱、作者與版本 */

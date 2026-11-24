@@ -286,6 +286,9 @@ function newChatFor(ownerKey, greetingIndex = 0, turnMode) {
   const messages = openingMessages(owner, greetingIndex);
   // 一律以角色／世界名稱命名，同名也不加編號（對話清單用時間區分；之後可以改名）
   const chat = { title: owner.name, messages };
+  // 固定這段對話的使用者設定檔：之後在設定頁切換，這段對話的名字（開場白已經寫進去了）也不會前後不一致
+  const pid = store.activePersonaId();
+  if (pid && store.getPersona(pid)) chat.persona_id = pid;
   if (owner.kind === 'world') chat.turn_mode = ['turns', 'narrator'].includes(turnMode) ? turnMode : owner.world.turn_mode;
   return store.saveChat(ownerKey, chat);
 }
@@ -1257,6 +1260,8 @@ route('PUT', '/api/characters/:id/chats/:chat', async (req, res, p) => {
     const v = k === 'user_name' ? body[k].trim().slice(0, 60) : body[k];
     if (v.trim()) chat[k] = v; else delete chat[k];
   }
+  // 自訂了這段對話的名字或人設、又沒有同時指定設定檔：改用自訂的（不然固定的使用者設定檔會蓋過自訂的內容）
+  if (!('persona_id' in body) && ['user_name', 'user_persona'].some(k => typeof body[k] === 'string' && body[k].trim())) delete chat.persona_id;
   // 這段對話停用的世界書（key 見 resolveOwner）
   if (Array.isArray(body.books_off)) {
     const off = [...new Set(body.books_off.filter(k => typeof k === 'string' && /^(world|w:[\w-]{1,80}|emb:[\w-]{1,80})$/.test(k)))];
@@ -1565,6 +1570,9 @@ const ready = (async () => {
     // 程式預設值改過的欄位：舊資料維持原本的值（例如 Temperature 0.9），不要在不知不覺中跟著變
     try { const p = store.pinChangedDefaults(); if (p.length) console.log(`  已保留原本的設定值：${p.join('、')}（程式的預設值改了，但你的設定維持不變）`); }
     catch (e) { console.warn('[設定] 保留原本的設定值失敗：', e.message); }
+    // 舊版的對話沒有固定使用者設定檔（一律跟著設定頁）：一次性地固定到目前使用中的
+    try { store.ensurePersonas(); const n = store.pinChatPersonas(); if (n) console.log(`  已把 ${n} 段對話固定使用目前的使用者設定檔（之後在設定頁切換不會影響它們）`); }
+    catch (e) { console.warn('[設定] 固定對話的使用者設定檔失敗：', e.message); }
     // 一定有一個使用中的模型設定檔：舊資料沒有的話，用目前的設定（含金鑰）建立一個
     try { const p = store.ensureProfile(); if (p) console.log(`  已用目前的設定建立模型設定檔「${p.name}」`); }
     catch (e) { console.warn('[設定] 建立模型設定檔失敗：', e.message); }

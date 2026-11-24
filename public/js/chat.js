@@ -438,7 +438,7 @@ async function openChatSettings() {
 
   // 這段對話的你：跟隨設定頁／使用者設定檔／這段對話自訂的名字與人設
   const personas = s.personas || [];
-  const youSel = h('select', {}, h('option', { value: '' }, `跟隨設定頁（目前：${s.user_name || 'User'}）`),
+  const youSel = h('select', {}, h('option', { value: '' }, `跟隨設定頁（目前：${s.user_name || 'User'}；在設定頁切換時，名字可能前後不一致）`),
     personas.map(p => h('option', { value: 'p:' + p.id }, `使用者設定檔：${p.name}｜${p.user_name}`)),
     h('option', { value: 'custom' }, '自訂（只用在這段對話）'));
   youSel.value = c.persona_id && personas.some(p => p.id === c.persona_id) ? 'p:' + c.persona_id

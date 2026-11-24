@@ -17,9 +17,9 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("葛恩")]                 // 公司
 [assembly: AssemblyCopyright("© 2026 葛恩")]        // 著作權
 [assembly: AssemblyDescription("AI 酒館啟動程式（啟動本機伺服器並開啟應用程式視窗）Made by 葛恩 with Claude.")] // 註解
-[assembly: AssemblyVersion("1.6.0.0")]
-[assembly: AssemblyFileVersion("1.6.0.0")]          // 檔案版本
-[assembly: AssemblyInformationalVersion("1.6.0")]   // 產品版本（和 package.json 一致）
+[assembly: AssemblyVersion("1.6.1.0")]
+[assembly: AssemblyFileVersion("1.6.1.0")]          // 檔案版本
+[assembly: AssemblyInformationalVersion("1.6.1")]   // 產品版本（和 package.json 一致）
 
 static class Launcher
 {
