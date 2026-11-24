@@ -7,7 +7,7 @@
 
 > 預設提示詞允許成人內容，僅供成年人使用。
 
-[![下載 Windows 版](https://img.shields.io/badge/%E4%B8%8B%E8%BC%89-Windows%20%E7%89%88-2ea44f?style=for-the-badge&logo=github)](https://github.com/GornBear/Gorn-AiTavern/releases/latest)
+[![下載 Windows 版](https://img.shields.io/badge/%E4%B8%8B%E8%BC%89-Windows%20%E7%89%88-2ea44f?style=for-the-badge&logo=github)](https://github.com/GornBear/Gorn-AITavern/releases/latest)
 
 ## 啟動
 
