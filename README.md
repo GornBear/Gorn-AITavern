@@ -3,7 +3,7 @@
 在本機執行的 AI 角色扮演聊天程式，類似 SillyTavern：基於 Node.js 的小型伺服器加上瀏覽器介面。
 簡單方便的圖形化介面，不用準備複雜的指令，輕鬆匯入、編輯角色卡，跟喜歡的角色聊天。
 連接自己的 API，不用受其他聊天網站供應商限制，可以接本地自架 AI，也能使用常見的 API（OpenAI 相容格式、Gemini、Claude）。
-（本軟體使用ClaudeCode開發）
+（本軟體使用 [Claude Code](https://claude.com/claude-code) 開發）
 
 > 預設提示詞允許成人內容，僅供成年人使用。
 
@@ -138,6 +138,8 @@ runtime/node.exe         內附的 Node.js（沒有安裝 Node.js 的電腦用�
 - `TAVERN_BROWSER`：指定開啟視窗用的瀏覽器路徑
 
 ## 開發
+
+程式由作者與 Claude 透過 [Claude Code](https://claude.com/claude-code) 共同撰寫。
 
 - `npm run server`：只啟動伺服器（不開視窗）
 - `npm test`：用暫存資料夾與假的 AI 服務跑一遍 API 測試，不會動到你的資料
