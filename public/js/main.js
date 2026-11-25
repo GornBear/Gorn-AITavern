@@ -14,6 +14,13 @@
     if (r.corrupt?.length) { /* 上方已有損毀提示 */ }
     else if (!r.settings.first_run_done && !$('#homeView').hidden) openFirstRunGuide();
     else if (r.settings.provider !== 'openai' && !r.keys[r.settings.provider]?.set) toast('尚未設定 API 金鑰，請到「設定」填寫', true);
+    // 檢查更新（「設定 → 關於」可以關閉）：有新版本時只顯示小紅點與一則提示，不跳出視窗
+    if (r.settings.update_check !== false) {
+      api('GET', '/api/update-check').then(u => {
+        state.update = u; markUpdateDot();
+        if (u.newer) toast(`有新版本 v${u.latest}，可以到「設定 → 關於」查看`, false, 6000);
+      }).catch(() => {});
+    }
   } catch (e) { fail(e); }
 })();
 

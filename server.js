@@ -884,6 +884,41 @@ function guardApiUrl(req, patch) {
 }
 // 程式版本：以 package.json 為準（exe 的版本資訊、打包的分享版也用同一個版本號）
 const APP_VERSION = (() => { try { return require('./package.json').version || ''; } catch { return ''; } })();
+
+// ---------- 檢查更新：讀 GitHub Releases 的最新版本，和目前的版本比較（只檢查、不下載） ----------
+// 只連到 GitHub（不送出任何個人資料）；結果在記憶體裡留 6 小時，重新整理頁面不會一直連線。TAVERN_UPDATE_URL：測試用
+const UPDATE_REPO = 'GornBear/Gorn-AITavern';
+const UPDATE_URL = process.env.TAVERN_UPDATE_URL || `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+const RELEASES_PAGE = `https://github.com/${UPDATE_REPO}/releases/latest`;
+let updateCache = null; // { at, data }
+const verParts = v => String(v || '').trim().replace(/^v/i, '').split(/[.+-]/).slice(0, 3).map(n => parseInt(n, 10) || 0);
+/** a 比 b 新（只比 主.次.修訂） */
+function isNewerVersion(a, b) {
+  const x = verParts(a), y = verParts(b);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+}
+async function checkUpdate(force) {
+  if (!force && updateCache && Date.now() - updateCache.at < 6 * 3600e3) return updateCache.data;
+  const base = { current: APP_VERSION, page: RELEASES_PAGE, checked: Date.now() };
+  try {
+    const r = await fetch(UPDATE_URL, { headers: { 'User-Agent': 'ai-tavern-update-check', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error(r.status === 404 ? '還沒有發布任何版本' : r.status === 403 || r.status === 429 ? 'GitHub 暫時限制查詢次數，請稍後再試' : `GitHub 回應 ${r.status}`);
+    const rel = await r.json();
+    const latest = String(rel.tag_name || '').trim().replace(/^v/i, '');
+    if (!/^\d+\.\d+/.test(latest)) throw new Error('讀不懂最新版本的版本號');
+    // 連結只接受 GitHub 上這個儲存庫的頁面（回應被竄改時不會帶你到別的網站）
+    const url = typeof rel.html_url === 'string' && rel.html_url.startsWith(`https://github.com/${UPDATE_REPO}/`) ? rel.html_url : RELEASES_PAGE;
+    const data = { ...base, latest, newer: isNewerVersion(latest, APP_VERSION), url, name: String(rel.name || ''), notes: String(rel.body || '').slice(0, 6000), published: rel.published_at || null };
+    updateCache = { at: Date.now(), data };
+    return data;
+  } catch (e) {
+    const msg = e.name === 'TimeoutError' || e.name === 'AbortError' ? '連線逾時' : e.message === 'fetch failed' || ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET'].includes(e.cause?.code) ? '連不上 GitHub（沒有網路？）' : e.message;
+    return { ...base, error: msg };
+  }
+}
+// force=1：手動按「立即檢查」（不用暫存的結果）
+route('GET', '/api/update-check', async (req, res, p, query) => send(res, 200, await checkUpdate(query.get('force') === '1')));
 // corrupt：損毀、讀不懂的設定檔（這時設定與金鑰會以預設值顯示，畫面上提示從備份還原）
 route('GET', '/api/settings', (req, res) => send(res, 200, { settings: withAvatar(store.getSettings()), keys: store.keyStatus(), version: APP_VERSION, corrupt: store.corruptFiles() }));
 route('PUT', '/api/settings', async (req, res) => {
@@ -892,6 +927,7 @@ route('PUT', '/api/settings', async (req, res) => {
   const { user_avatar, bg_ver, personas: _personas, active_persona: _active, profiles: _profiles, active_profile: _activeProfile, ...patch } = await readJsonBody(req);
   checkRanges(patch);
   guardApiUrl(req, patch);
+  if ('update_check' in patch && typeof patch.update_check !== 'boolean') throw Object.assign(new Error('update_check 要是 true 或 false'), { status: 400 });
   if ('external_images' in patch && typeof patch.external_images !== 'boolean') throw Object.assign(new Error('external_images 要是 true 或 false'), { status: 400 });
   if ('reply_language' in patch && !Object.hasOwn(LANGUAGES, patch.reply_language)) throw Object.assign(new Error('未知的對話語言'), { status: 400 });
   const saved = store.saveSettings(patch);

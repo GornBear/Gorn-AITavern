@@ -562,6 +562,12 @@ function askConfirm(message,{ okText, cancelText = '取消', danger } = {}) {
 
 // 聊天紀錄上限的選項（設定頁的預設值、對話設定共用）；0 = 不限（只受上下文長度限制）
 const HISTORY_CAP_OPTS = [[0, '不限（只受上下文長度限制）'], [8000, '8k'], [16000, '16k'], [24000, '24k'], [32000, '32k'], [48000, '48k'], [64000, '64k'], [96000, '96k'], [128000, '128k']];
+/** 有新版本時（state.update，見 main.js 與設定頁「關於」）：底部的「設定」與「關於」分頁顯示小紅點 */
+function markUpdateDot() {
+  const on = !!state.update?.newer;
+  document.querySelector('#tabbar [data-tab="settings"]')?.classList.toggle('has-dot', on);
+  document.querySelector('.tabs .about-tab')?.classList.toggle('has-dot', on);
+}
 const fmtCap = v => (v > 0 ? `${Math.round(v / 1000)}k tokens` : '不限');
 
 // ===================== 外觀（動畫、背景、主題色、字級） =====================

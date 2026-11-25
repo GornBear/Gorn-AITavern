@@ -46,6 +46,8 @@ http.createServer((req, res) => {
       ev({ candidates: [{ content: { role: 'model', parts: [{ text: '星回覆' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 321, candidatesTokenCount: 12, thoughtsTokenCount: 8 } });
       return res.end();
     }
+    // 檢查更新：假的 GitHub Releases（最新版本 99.0.0；連結故意指到別的網站，伺服器要換回儲存庫的頁面）
+    if (req.url === '/github/releases/latest') return res.writeHead(200, { 'Content-Type': 'application/json' }), res.end(JSON.stringify({ tag_name: 'v99.0.0', name: 'AI 酒館 v99.0.0', html_url: 'https://evil.example.com/x', body: '## 更新內容\n- 測試', published_at: '2026-11-25T00:00:00Z' }));
     if (req.url.startsWith('/gem/') && req.url.endsWith('/models')) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ id: 'models/gemini-z' }, { id: 'models/gemini-a' }] })); }
     if (req.url.endsWith('/models')) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ id: 'mock-b' }, { id: 'mock-a' }] })); }
     const body = JSON.parse(b || '{}');

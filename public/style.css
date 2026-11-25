@@ -798,3 +798,19 @@ html[data-motion="off"] details::details-content { transition: none; }
   .composer-top #btnContinue { margin-left: auto; } /* token 紀錄在窄螢幕隱藏：按鈕照樣靠右 */
   .composer-main > .primary, .composer-main > .danger { width: 70px; }
 }
+
+/* 有新版本：底部「設定」與「關於」分頁的小紅點 */
+.has-dot { position: relative; }
+.has-dot::after { content: ''; position: absolute; top: 6px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 2px var(--bg, #0b1020); }
+#tabbar .has-dot::after { right: calc(50% - 18px); }
+/* 設定 → 關於 */
+.about-head { display: flex; align-items: center; gap: 14px; }
+.about-head h2 { margin: 0 0 2px; font-size: 20px; }
+.about-head p { margin: 0; }
+.about-icon { width: 56px; height: 56px; }
+.update-status p { margin: 0 0 6px; }
+.update-status .update-new { color: var(--accent); font-weight: 600; }
+.update-notes { margin: 8px 0; }
+.update-notes summary { cursor: pointer; }
+.update-notes-body { white-space: pre-wrap; max-height: 240px; overflow: auto; margin-top: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.about-links { margin: 0; padding-left: 20px; line-height: 1.9; }

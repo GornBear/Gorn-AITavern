@@ -1,6 +1,6 @@
 {
   "name": "ai-tavern",
-  "version": "1.6.1",
+  "version": "1.7.0",
   "description": "本機 AI 酒館：角色卡聊天、世界書、串流輸出",
   "main": "server.js",
   "private": true,

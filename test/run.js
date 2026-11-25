@@ -45,6 +45,7 @@ function cleanup() {
     TAVERN_DATA_DIR: path.join(tmp, 'data'), TAVERN_CONFIG: path.join(tmp, 'config.json'), TAVERN_WINDOW_FILE: path.join(tmp, 'window.json'), TAVERN_RUNTIME_DIR: path.join(tmp, 'runtime'),
     OPENAI_API_KEY: '', GEMINI_API_KEY: '', ANTHROPIC_API_KEY: '',
     TAVERN_GEMINI_URL: `http://127.0.0.1:${mockPort}/gemini`, // Gemini 原生 API 改連假的服務
+    TAVERN_UPDATE_URL: `http://127.0.0.1:${mockPort}/github/releases/latest`, // 檢查更新改連假的服務
   }, /http:\/\/127\.0\.0\.1:\d+/);
   // 伺服器記錄存成檔案：測試可以檢查某些操作不會印出錯誤
   const serverLog = path.join(tmp, 'server.log');

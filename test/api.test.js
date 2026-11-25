@@ -1253,6 +1253,22 @@ function rawReq(method, url, headers = {}, body) {
   await j('PUT', '/api/settings', { user_name: '旅人' }); // 後面的測試用這個名字
   await j('PUT', '/api/settings', { memory_enabled: true });
 
+  // ===== 檢查更新（連到假的 GitHub Releases） =====
+  {
+    const ver = JSON.parse(fs.readFileSync(path.join(PROJ, 'package.json'), 'utf8')).version;
+    r = await j('GET', '/api/update-check?force=1');
+    ok(r.status === 200 && r.data.current === ver && r.data.latest === '99.0.0' && r.data.newer === true && r.data.notes.includes('更新內容'), '檢查更新：讀到最新版本並和目前的比較', JSON.stringify(r.data).slice(0, 200));
+    ok(r.data.url === 'https://github.com/GornBear/Gorn-AITavern/releases/latest', '下載連結不是這個儲存庫的頁面時：換成儲存庫的 Releases 頁面', r.data.url);
+    const again = await j('GET', '/api/update-check');
+    ok(again.data.checked === r.data.checked, '沒有按「立即檢查」時用暫存的結果（不會一直連線）');
+    ok(require(path.join(PROJ, 'lib/storage.js')).DEFAULT_SETTINGS.update_check === true, '預設每次啟動時檢查更新');
+    r = await j('PUT', '/api/settings', { update_check: 'yes' });
+    ok(r.status === 400, '自動檢查更新的設定只能是 true 或 false');
+    r = await j('PUT', '/api/settings', { update_check: false });
+    ok(r.data.settings.update_check === false, '可以關閉自動檢查更新');
+    await j('PUT', '/api/settings', { update_check: true });
+  }
+
   // ===== 搜尋訊息內容（U1） =====
   r = await j('GET', '/api/search?q=' + encodeURIComponent('msg_31'));
   ok(r.data.some(x => x.chat === tcid && x.owner === id && x.index === 31 && x.snippet.includes('MSG_31')), '搜尋所有對話的訊息內容（不分大小寫，附上第幾則）', JSON.stringify(r.data).slice(0, 200));

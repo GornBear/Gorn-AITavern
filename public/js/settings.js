@@ -635,9 +635,7 @@ async function openSettings() {
       h('div', { class: 'form grow' },
         h('label', {}, h('span', {}, '你的名字（{{user}}）'), inp('user_name', { value: s.user_name, maxlength: 60, required: true, placeholder: '必填，例如 User' })),
         h('p', { class: 'muted small-note' }, '頭像會顯示在對話中你的訊息旁邊；選好圖片就會直接儲存。'))),
-    h('label', {}, h('span', {}, '你的人設（會加入提示詞）'), f.user_persona = h('textarea', { rows: 6, value: s.user_persona })),
-    // 頁尾：程式名稱、作者與版本（版本號來自 package.json）
-    h('p', { class: 'app-credit' }, 'AI 酒館 － Made by 葛恩 with Claude' + (version ? `｜版本 ${version}` : '')));
+    h('label', {}, h('span', {}, '你的人設（會加入提示詞）'), f.user_persona = h('textarea', { rows: 6, value: s.user_persona })));
   renderAv();
 
   // 使用中的設定檔被改過（還沒儲存）：下拉選單改成顯示「已修改，尚未儲存」，看得出畫面上的不是設定檔存的內容；
@@ -664,8 +662,61 @@ async function openSettings() {
   systemPane.addEventListener('change', onModelEdit);
   for (const el of [f.user_name, f.user_persona]) el.addEventListener('input', markPersonaDirty);
 
-  // 分頁順序：API 設定 > 提示詞設定 > 資料 > 外觀 > 使用者（使用者固定在最右邊）
-  const panes = { system: systemPane, prompt: promptPane, data: dataPane, appearance: appearancePane, user: userPane };
+  // 關於：程式名稱與版本、檢查更新、GitHub 連結、授權
+  const REPO = 'https://github.com/GornBear/Gorn-AITavern';
+  const link = (href, label) => h('a', { href, target: '_blank', rel: 'noopener noreferrer' }, label);
+  const updStatus = h('div', { class: 'update-status' });
+  const updBtn = h('button', { type: 'button', onclick: () => runUpdateCheck(true) }, ic('refresh-cw', '立即檢查'));
+  const updAuto = h('input', { type: 'checkbox', checked: s.update_check !== false });
+  updAuto.onchange = async () => {
+    try {
+      const r = await api('PUT', '/api/settings', { update_check: updAuto.checked }); state.settings = r.settings;
+      toast(updAuto.checked ? '每次啟動時會檢查新版本' : '已關閉自動檢查（還是可以按「立即檢查」）');
+    } catch (e) { updAuto.checked = !updAuto.checked; fail(e); }
+  };
+  const renderUpdate = (u, busy = false) => {
+    updStatus.replaceChildren();
+    updStatus.className = 'update-status' + (u?.newer ? ' newer' : '');
+    if (busy) return updStatus.append(h('p', { class: 'muted' }, '檢查中…'));
+    if (!u) return updStatus.append(h('p', { class: 'muted' }, '還沒有檢查過。按「立即檢查」看看有沒有新版本。'));
+    const when = u.checked ? new Date(u.checked).toLocaleString() : '';
+    if (u.error) return updStatus.append(h('p', {}, `無法檢查更新：${u.error}`), h('p', { class: 'muted small-note' }, '可以稍後再試，或直接到 ', link(u.page || REPO + '/releases/latest', 'GitHub Releases'), ' 看看。'));
+    if (!u.newer) return updStatus.append(h('p', {}, ic('check', `已經是最新版本（v${u.current}）`)), h('p', { class: 'muted small-note' }, `GitHub 上最新的是 v${u.latest}｜檢查時間 ${when}`));
+    updStatus.append(
+      h('p', { class: 'update-new' }, `有新版本：v${u.latest}（目前 v${u.current}）`),
+      h('div', { class: 'btns' }, h('button', { type: 'button', class: 'success', title: u.url, onclick: () => window.open(u.url, '_blank', 'noopener') }, ic('download', '前往下載'))),
+      u.notes ? h('details', { class: 'update-notes' }, h('summary', {}, '這一版的更新內容'), h('div', { class: 'update-notes-body' }, u.notes)) : null,
+      h('p', { class: 'muted small-note' }, '更新方式：下載新版解壓縮到新的資料夾，再把舊資料夾裡的 userdata/ 整個複製過去（角色卡、對話、設定與金鑰都在裡面）。'));
+  };
+  async function runUpdateCheck(force) {
+    renderUpdate(null, true); updBtn.disabled = true;
+    try { state.update = await api('GET', '/api/update-check' + (force ? '?force=1' : '')); markUpdateDot(); }
+    catch (e) { state.update = { error: e.message }; }
+    finally { updBtn.disabled = false; renderUpdate(state.update); }
+  }
+  // 啟動時的檢查還沒回來（或一打開就是設定頁）：直接拿一次（伺服器有暫存，不會重複連線）
+  if (state.update) renderUpdate(state.update);
+  else if (s.update_check !== false) runUpdateCheck(false);
+  else renderUpdate(null);
+  const aboutPane = h('div', { class: 'form about-pane' },
+    h('div', { class: 'about-head' }, h('img', { src: '/icon.png', alt: '', class: 'about-icon' }),
+      h('div', {}, h('h2', {}, 'AI 酒館'), h('p', { class: 'muted' }, (version ? `版本 ${version}｜` : '') + 'Made by 葛恩 with Claude（使用 Claude Code 開發）'))),
+    h('fieldset', {}, h('legend', {}, '檢查更新'),
+      updStatus,
+      h('div', { class: 'btns' }, updBtn),
+      h('label', { class: 'check' }, updAuto, '每次啟動時自動檢查新版本'),
+      h('p', { class: 'muted small-note' }, '只會連到 GitHub 查詢最新的版本號，不會送出你的任何資料，也不會自動下載或安裝；有新版本時，底部的「設定」與這個分頁會出現小紅點。')),
+    h('fieldset', {}, h('legend', {}, '連結'),
+      h('ul', { class: 'about-links' },
+        h('li', {}, link(REPO, 'GitHub 專案頁面'), h('span', { class: 'muted' }, '：原始碼與說明')),
+        h('li', {}, link(REPO + '/releases', '所有版本（Releases）'), h('span', { class: 'muted' }, '：下載與各版本的更新內容')),
+        h('li', {}, link(REPO + '/issues', '回報問題（Issues）'), h('span', { class: 'muted' }, '：需要 GitHub 帳號')))),
+    h('fieldset', {}, h('legend', {}, '授權'),
+      h('p', {}, 'AI 酒館以 MIT 授權發布：可以自由使用、修改與散布，只要保留版權聲明。'),
+      h('p', { class: 'muted small-note' }, '介面圖示來自 Lucide（ISC 授權）；連線 Claude 使用 Anthropic 的官方 SDK（Apache 2.0）；分享版附的 Node.js 以 MIT 授權發布。詳見程式資料夾裡的 LICENSE 與 THIRD_PARTY_NOTICES.md。')));
+
+  // 分頁順序：API 設定 > 提示詞設定 > 資料 > 外觀 > 使用者 > 關於（關於固定在最右邊）
+  const panes = { system: systemPane, prompt: promptPane, data: dataPane, appearance: appearancePane, user: userPane, about: aboutPane };
   const tabKeys = Object.keys(panes);
   const { bar: tabBar } = tabsUI([
     [ic('plug', 'API 設定'), systemPane],
@@ -673,8 +724,12 @@ async function openSettings() {
     [ic('database', '資料'), dataPane],
     [ic('sparkles', '外觀'), appearancePane],
     [ic('user', '使用者'), userPane],
+    [ic('info', '關於'), aboutPane],
   ], Math.max(0, tabKeys.indexOf(state.settingsTab)), i => (state.settingsTab = tabKeys[i]));
-  const body = h('div', {}, tabBar, systemPane, promptPane, dataPane, appearancePane, userPane);
+  const aboutBtn = tabBar.querySelectorAll('button')[tabKeys.indexOf('about')];
+  aboutBtn?.classList.add('about-tab');
+  aboutBtn?.classList.toggle('has-dot', !!state.update?.newer); // 分頁列還沒放進畫面：直接設定（之後的變化由 markUpdateDot 處理）
+  const body = h('div', {}, tabBar, systemPane, promptPane, dataPane, appearancePane, userPane, aboutPane);
 
   /**
    * 儲存設定。only：只存一部分，其他分頁的變更不動
