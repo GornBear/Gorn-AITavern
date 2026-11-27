@@ -259,7 +259,10 @@ async function openWorlds() {
         h('div', { class: 'title' }, arrow, w.name), h('div', { class: 'sub' }, `${w.count} 個條目`)),
       h('button', { class: 'small', title: '編輯', onclick: () => openWorldEditor(w.id) }, ic('pencil', '編輯')),
       h('button', { class: 'small', title: '匯出', onclick: () => exportFile({ kind: 'world', id: w.id }, `/api/worlds/${w.id}/export`) }, icon('export')),
-      h('button', { class: 'small', title: '刪除', onclick: async () => { if (!await askConfirm(`刪除世界書「${w.name}」？\n會移到垃圾桶，${trashDaysText()}`)) return; await api('DELETE', `/api/worlds/${w.id}`); openWorlds(); } }, icon('trash-2')));
+      h('button', { class: 'small', title: '刪除', onclick: async () => {
+        if (!await askConfirm(`刪除世界書「${w.name}」？\n會移到垃圾桶，${trashDaysText()}`)) return;
+        try { await api('DELETE', `/api/worlds/${w.id}`); await openWorlds(); } catch (e) { fail(e); }
+      } }, icon('trash-2')));
     return h('div', { class: 'wb-row' }, item, panel);
   };
   const list = h('div', { class: 'list' }, state.worlds.length ? state.worlds.map(row)
@@ -267,7 +270,11 @@ async function openWorlds() {
   const note = state.worlds.length ? h('p', { class: 'muted small-note' }, '打勾＝全域啟用（對所有角色、所有對話生效，和「設定 → 提示詞設定 → 全域世界書」同步）。角色卡或世界連結的世界書不用打勾也會生效；個別對話要停用，請到「對話設定 → 世界書」。點名稱展開條目，按右邊的「編輯」修改。') : null;
   openModal('世界書', h('div', {}, note, list, file), [
     h('button', { onclick: () => file.click() }, ic('import', '匯入（JSON / 角色卡）')),
-    h('button', { class: 'primary', onclick: async () => { const name = await askText('新增世界書', { note: '世界書的名稱', value: '新世界書', okText: '建立' }); if (!name) return; const r = await api('POST', '/api/worlds', { name, entries: [] }); openWorldEditor(r.id); } }, ic('plus', '新增'))], { esc: true });
+    h('button', { class: 'primary', onclick: async () => {
+      const name = await askText('新增世界書', { note: '世界書的名稱', value: '新世界書', okText: '建立' });
+      if (!name) return;
+      try { const r = await api('POST', '/api/worlds', { name, entries: [] }); await openWorldEditor(r.id); } catch (e) { fail(e); }
+    } }, ic('plus', '新增'))], { esc: true });
 }
 async function openWorldEditor(id) {
   const w = await api('GET', `/api/worlds/${id}`);
@@ -783,7 +790,8 @@ async function openCharEditor(ch, { back } = {}) {
     h('button', { onclick: () => exportCharFile(ch.id, 'png') }, ic('export', '匯出 PNG')),
     h('button', { onclick: () => exportCharFile(ch.id, 'json') }, ic('export', '匯出 JSON')),
     // .charx：連同封面與表情圖一起帶走（PNG、JSON 只有角色資料）
-    h('button', { title: '角色卡 V3 的 ZIP 格式：連同封面與所有表情圖一起匯出', onclick: () => exportCharFile(ch.id, 'charx') }, ic('export', '匯出 .charx')),    h('button', { class: 'danger', onclick: async () => {
+    h('button', { title: '角色卡 V3 的 ZIP 格式：連同封面與所有表情圖一起匯出', onclick: () => exportCharFile(ch.id, 'charx') }, ic('export', '匯出 .charx')),
+    h('button', { class: 'danger', onclick: async () => {
       if (!await askConfirm(`確定刪除角色「${ch.data.name}」以及所有聊天紀錄？\n角色連同所有對話會移到垃圾桶，${trashDaysText()}`)) return;
       try { await api('DELETE', `/api/characters/${ch.id}`); } catch (e) { return fail(e); } // 刪除失敗：視窗留著，不顯示成功
       closeModal(); toast('已刪除角色');

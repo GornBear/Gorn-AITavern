@@ -522,12 +522,21 @@ const fmtTime = t => t ? new Date(t).toLocaleString('zh-TW', { hour12: false, mo
 function download(url) { const a = h('a', { href: url, download: '' }); document.body.append(a); a.click(); a.remove(); }
 /** 這個畫面是在執行酒館的這台電腦上開的（應用程式視窗、或本機瀏覽器）：匯出時可以由伺服器直接存檔 */
 const onHostMachine = () => ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname);
+/** API 位址是不是自己架的（本機或區網的 LM Studio、Ollama，通常不需要金鑰）；和伺服器 lib/providers.js 的 isLocalHost 相同 */
+const isSelfHostedUrl = u => { try { return /^(localhost|127\.|\[?::1\]?$|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|[\w-]+\.local$)/i.test(new URL(String(u || '')).hostname); } catch { return false; } };
 /**
  * 匯出（角色卡、世界書、備份、全部資料）。在這台電腦上：伺服器直接存到「下載」資料夾，顯示實際的存檔路徑；
  * 別台裝置（手機、區網）或直接存檔失敗時：照舊讓瀏覽器下載（url）。
  * what = { kind: 'char'|'world'|'backup'|'all', id, format }（見 server.js 的 EXPORTS）
  */
 async function exportFile(what, url) {
+  // 全部資料、備份：太大的檔案匯出得了、卻匯不回來（解壓縮後超過約 5 億字元就解析不了），先提醒
+  if (what.kind === 'all' || what.kind === 'backup') {
+    const est = await api('GET', `/api/export/estimate?kind=${what.kind}${what.id ? `&id=${encodeURIComponent(what.id)}` : ''}`).catch(() => null);
+    if (est?.too_big && !await askConfirm(`這個檔案太大，匯出後沒辦法用「匯入資料」還原\n`
+      + `解壓縮後大約 ${Math.round(est.chars / 1048576)} MB，超過匯入能處理的上限（約 ${Math.round(est.limit / 1048576)} MB）。檔案本身照樣可以保存、當作封存。\n\n`
+      + '要搬到另一台電腦，請改用直接複製資料夾：先關掉兩台電腦的酒館，把 AI 酒館資料夾裡的 userdata 整個複製過去（取代原本的 userdata），再開啟酒館。', { okText: '仍要匯出', danger: false })) return;
+  }
   if (!onHostMachine()) { download(url); return toast('已開始下載，檔案會存在這台裝置的下載資料夾'); }
   try {
     const r = await api('POST', '/api/export-save', what);
@@ -668,12 +677,42 @@ const fmtCap = v => (v > 0 ? `${Math.round(v / 1000)}k tokens` : '不限');
 // ===================== 外觀（動畫、背景、主題色、字級） =====================
 const APPEARANCE_DEFAULT = { motion: 'on', background: 'stars', bg_dim: 0.55, accent: '', font_size: 15 };
 const APPEARANCE_CACHE = 'tavern-appearance'; // 記在瀏覽器裡，下次開啟時一載入就套用，不會先閃一下預設主題
+/**
+ * 這個底色上的字要用深褐還是米白：比較兩種的對比度（WCAG 的算法），挑高的那個。
+ * 設定頁的六個主題色都是亮色，會挑深褐（對比度 6.6～9.9:1）；用調色盤選了很深的顏色時會挑米白
+ */
+function inkOn(hex) {
+  return contrastRatio(hex, '#2b1606') >= contrastRatio(hex, '#fff8ea') ? '#2b1606' : '#fff8ea';
+}
+/** 兩個顏色（#rrggbb）的對比度（WCAG 的算法，1～21） */
+function contrastRatio(a, b) {
+  const lum = h => { const c = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(x => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+}
+/**
+ * 把 hex 一點一點混入 toward（調深用深褐、調亮用白），直到放在 bg 上的對比度有 4.5:1（一般文字的最低標準）；
+ * 本來就夠清楚的原樣回傳。bg 是這個主題裡最不利的底色（古卷軸：最深的紙色；星空：最亮的對話框）
+ */
+function readableOn(hex, bg, toward) {
+  const mix = p => '#' + [1, 3, 5].map(i => Math.round(parseInt(hex.slice(i, i + 2), 16) * p + parseInt(toward.slice(i, i + 2), 16) * (1 - p)).toString(16).padStart(2, '0')).join('');
+  for (let p = 1; p > 0; p -= 0.02) { const c = mix(p); if (contrastRatio(c, bg) >= 4.5) return c; }
+  return toward;
+}
 function applyAppearance(a, bgVer, remember = true) {
   a = { ...APPEARANCE_DEFAULT, ...(a || {}) };
   const root = document.documentElement;
   root.dataset.motion = a.motion === 'off' ? 'off' : 'on';
   root.dataset.bg = a.background === 'image' && !bgVer ? 'stars' : a.background; // 選了圖片但還沒上傳：先用星空
-  if (/^#[0-9a-f]{6}$/i.test(a.accent || '')) root.style.setProperty('--accent', a.accent); else root.style.removeProperty('--accent');
+  const custom = /^#[0-9a-f]{6}$/i.test(a.accent || '');
+  // 文字用的主題色要看得清楚：古卷軸（淺色紙）上太亮就調深、星空（深色）上太暗就調亮，只調到夠清楚為止（保留最多原本的顏色）
+  if (custom) root.style.setProperty('--accent', a.background === 'paper' ? readableOn(a.accent, '#dcc28b', '#2b1606') : readableOn(a.accent, '#1e2c58', '#ffffff'));
+  else root.style.removeProperty('--accent');
+  // 古卷軸：按鈕、切換開關這類底色用你選的原色（不調深），上面的字依底色深淺用深褐或米白（style.css 的 --accent-fill、--on-accent）
+  if (custom && a.background === 'paper') {
+    root.style.setProperty('--accent-fill', a.accent);
+    root.style.setProperty('--on-accent', inkOn(a.accent));
+  } else { root.style.removeProperty('--accent-fill'); root.style.removeProperty('--on-accent'); }
   root.style.setProperty('--font-size', (Number(a.font_size) || 15) + 'px');
   root.style.setProperty('--bg-dim', String(Math.min(0.9, Math.max(0, Number(a.bg_dim) || 0))));
   if (bgVer) root.style.setProperty('--bg-image', `url("/api/appearance/background?v=${bgVer}")`); else root.style.removeProperty('--bg-image');

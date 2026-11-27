@@ -671,7 +671,8 @@ async function startNewChat(charId) {
         h('div', { class: 'grow' },
           h('div', { class: 'title' }, title, w.turn_mode === mode ? h('span', { class: 'tag' }, '世界預設') : null),
           h('div', { class: 'sub' }, sub)));
-      radio.onchange = () => { picked = mode; items.forEach(x => x.classList.toggle('picked', x === it)); };      items.push(it);
+      radio.onchange = () => { picked = mode; items.forEach(x => x.classList.toggle('picked', x === it)); };
+      items.push(it);
       return it;
     };
     openModal(`開始對話：${w.name}`, h('div', {},

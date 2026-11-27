@@ -352,7 +352,8 @@ async function openSettings() {
     if (!file) return;
     // 大檔案：匯入時伺服器要把整個檔案讀進記憶體，太大會很慢或失敗；建議改成直接複製 userdata 資料夾
     const MB = 1048576, copyTip = '資料很多時，建議改用直接複製資料夾：先關掉兩台電腦的酒館，把舊電腦 AI 酒館資料夾裡的 userdata 資料夾整個複製到新電腦的 AI 酒館資料夾（取代原本的 userdata），再開啟酒館即可（API 金鑰也會一起帶過去）。';
-    if (file.size > 1024 * MB) return askConfirm(`「${file.name}」有 ${fmtSize(file.size)}，超過匯入的上限（1 GB）。\n\n${copyTip}`, { okOnly: true }).catch(() => {});
+    // 上限 600 MB（和伺服器相同）：再大的檔案解壓縮後一定超過能解析的大小（約 5 億字元）
+    if (file.size > 600 * MB) return askConfirm(`「${file.name}」有 ${fmtSize(file.size)}，超過匯入的上限（600 MB）。\n\n${copyTip}`, { okOnly: true }).catch(() => {});
     if (file.size > 300 * MB && !await askConfirm(`「${file.name}」有 ${fmtSize(file.size)}。匯入時要把整個檔案讀進記憶體，可能要等很久，記憶體不夠時也可能失敗。\n\n${copyTip}\n\n仍要用匯入的方式嗎？`)) return;
     if (!await askConfirm(`匯入「${file.name}」？\n目前的角色、對話、世界、世界書與設定會換成檔案裡的內容（目前的資料會先自動備份一份；API 金鑰與連線設定不受影響）。`)) return;
     try {
@@ -588,7 +589,7 @@ async function openSettings() {
       h('label', {}, h('span', {}, '背景變暗（圖片太亮時調高，文字比較好讀）'), h('div', { class: 'range-row' }, dim, dimLabel))));
   renderThumb();
   // 主題色：預設幾組＋自選
-  const ACCENTS = [['', '星光藍'], ['#b18cff', '紫羅蘭'], ['#4fd1c5', '青綠'], ['#ff8fb8', '櫻粉'], ['#ffb648', '琥珀'], ['#7fd67a', '新葉']];
+  const ACCENTS = [['', '星光藍'], ['#b18cff', '紫羅蘭'], ['#4fd1c5', '青綠'], ['#ff8fb8', '櫻粉'], ['#ffb648', '琥珀'], ['#7fd67a', '新葉'], ['#7a3a10', '胡桃木']]; // 胡桃木：古卷軸主題原本的赭褐色（在星空背景上會自動調亮）
   // 只建立一次，之後只切換「選中」的樣式：取色器的 input 一旦被移出畫面，瀏覽器會立刻關掉取色視窗
   const colorIn = h('input', { type: 'color', class: 'accent-pick', title: '自選顏色', value: ap.accent || '#79a8ff',
     oninput: () => { ap.accent = colorIn.value; renderSwatches(); preview(); } });
@@ -601,7 +602,7 @@ async function openSettings() {
     h('fieldset', {}, h('legend', {}, '動畫'),
       h('label', {}, h('span', {}, '星星閃爍、卡片浮起、分頁切換與收合的轉場等動畫'), apSel('motion', [['on', '開啟'], ['off', '關閉']]))),
     h('fieldset', {}, h('legend', {}, '背景'),
-      h('label', {}, h('span', {}, '背景樣式'), apSel('background', [['stars', '星空（預設）'], ['night', '夜空漸層'], ['plain', '純色深藍'], ['image', '自訂圖片']])),
+      h('label', {}, h('span', {}, '背景樣式'), apSel('background', [['stars', '星空（預設）'], ['night', '夜空漸層'], ['plain', '純色深藍'], ['paper', '古卷軸（淺色主題）'], ['image', '自訂圖片']])),
       imgBox),
     h('fieldset', {}, h('legend', {}, '主題色（按鈕、名稱、選中的分頁等）'), swatches),
     h('fieldset', {}, h('legend', {}, '文字'),
@@ -854,6 +855,15 @@ async function openSettings() {
     }
     if (only === 'model') patch = Object.fromEntries(PROFILE_FIELDS.map(k => [k, patch[k]]));
     else if (only === 'user') patch = { user_name: patch.user_name, user_persona: patch.user_persona };
+    // 縮短垃圾桶保留天數：儲存時超過新天數的項目會馬上永久刪除，先說清楚有幾項、問一次
+    if ('trash_days' in patch && patch.trash_days < (state.settings?.trash_days ?? 7)) {
+      const items = (await api('GET', '/api/trash').catch(() => ({ items: [] }))).items || [];
+      const limit = Date.now() - patch.trash_days * 86400000;
+      const gone = items.filter(it => it.deleted < limit);
+      if (gone.length && !await askConfirm(`把垃圾桶的保留天數縮短成 ${patch.trash_days} 天？\n儲存後，垃圾桶裡有 ${gone.length} 項已經超過 ${patch.trash_days} 天，會馬上永久刪除、無法復原：\n`
+        + gone.slice(0, 5).map(it => `・${it.title}`).join('\n') + (gone.length > 5 ? `\n…還有 ${gone.length - 5} 項` : ''), { okText: '縮短並刪除', danger: true }))
+        throw Object.assign(new Error('已取消：設定沒有儲存（垃圾桶的項目都還在）'), { cancelled: true });
+    }
     const r = await api('PUT', '/api/settings', patch);
     state.settings = r.settings;
     if ('trash_days' in patch) api('GET', '/api/trash').then(renderTrash).catch(() => {}); // 縮短保留天數時已清掉過期的

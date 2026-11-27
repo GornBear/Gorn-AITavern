@@ -1,11 +1,12 @@
 {
+  "_說明": "建議直接在「設定 → API 設定」填寫金鑰。要手動填寫時，把這個檔案複製成 userdata/config.json，在用得到的供應商的 api_key 填入金鑰（只要貼上金鑰本身，不要有空白或中文）；用不到的留空即可。本機模型（LM Studio、Ollama）不需要金鑰。",
   "openai": {
-    "api_key": "OpenAI 相容 API 的金鑰（本機模型可留空）"
+    "api_key": ""
   },
   "gemini": {
-    "api_key": "Google Gemini API 金鑰（AIza 開頭）"
+    "api_key": ""
   },
   "anthropic": {
-    "api_key": "Anthropic API 金鑰"
+    "api_key": ""
   }
 }

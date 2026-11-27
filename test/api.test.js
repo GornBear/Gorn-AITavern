@@ -126,7 +126,13 @@ function rawReq(method, url, headers = {}, body) {
   const text = ev.filter(e => e.type === 'text').map(e => e.text).join('');
   const done = ev.find(e => e.type === 'done');
   ok(text === '啊啦……晚上好呀～「要喝點石榴汽水嗎？」 呵呵～', '串流文字完整', text);
-  ok(done && done.chat.messages.length === 3, '生成後存檔（3 則）', JSON.stringify(ev.find(e => e.type === 'error')));
+  ok(done && done.chat.messages_len === 3, '生成後存檔（3 則）', JSON.stringify(ev.find(e => e.type === 'error')));
+  // 生成結束只送回這次動到的訊息（之前的訊息不重送），畫面拼回整段；msg_ver 和完整讀取的一樣
+  {
+    const full = (await j('GET', `/api/characters/${id}/chats/${chatId}`)).data;
+    ok(!('messages' in done.chat) && done.chat.messages_from === 0 && done.chat.messages_tail.length === 3 && done.chat.msg_ver === full.msg_ver,
+      '生成結束：只送回最後一則之後的訊息，版本號和完整讀取相同', JSON.stringify({ f: done.chat.messages_from, t: done.chat.messages_tail?.length, v: done.chat.msg_ver === full.msg_ver }));
+  }
   const req = lastReq();
   const all = req.messages.map(m => m.content).join('\n');
   ok(req.stream === true && req.model === 'mock-a' && req.temperature === 0.7, '請求參數（新安裝的預設 Temperature 0.7）');
@@ -933,7 +939,7 @@ function rawReq(method, url, headers = {}, body) {
       && greq.body.contents.at(-1).parts[0].text.includes('你好'), 'Gemini：系統提示放在 systemInstruction，對話用 user／model', JSON.stringify(greq.body.contents.map(c => c.role)));
     ok(greq.body.generationConfig.maxOutputTokens > 0 && greq.body.generationConfig.thinkingConfig?.includeThoughts === true && !('thinkingLevel' in greq.body.generationConfig.thinkingConfig),
       'Gemini：生成參數與思考設定（沒指定思考程度就不送）', JSON.stringify(greq.body.generationConfig));
-    const gmsg = gdone?.chat.messages.at(-1);
+    const gmsg = gdone?.chat.messages_tail.at(-1);
     ok(gmsg?.reasoning === 'GEM_THOUGHT' && gmsg.content === '雙子星回覆', 'Gemini：思考內容另外存，不混進回覆', JSON.stringify(gmsg));
     // 思考程度：Gemini 3 以後用 thinkingLevel；不支援思考的模型自動拿掉思考設定重試
     await j('PUT', '/api/settings', { gemini: { model: 'gemini-mock', reasoning_effort: 'high' } });
@@ -2540,6 +2546,193 @@ function rawReq(method, url, headers = {}, body) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
     ok(fs.readFileSync(path.join(PROJ, 'server.js'), 'utf8').includes("if (lanAuth && await lanAuth.handle(req, res, pathname, isLoopback(req))) return;"), '伺服器：開放區網時每個請求都先檢查存取碼');
+
+    // ===== 2026-11 檢查報告的修正 =====
+    // #1 區網模式也要檢查 Host：DNS rebinding 時 Host 是攻擊者的網域，請求卻是這台電腦的瀏覽器送出的（不用存取碼）
+    {
+      const { hostAllowed } = require(path.join(PROJ, 'lib/lan-auth.js'));
+      ok(hostAllowed('127.0.0.1:8000') && hostAllowed('localhost:8000') && hostAllowed('[::1]:8000') && !hostAllowed('192.168.1.5:8000') && !hostAllowed('evil.example:8000') && !hostAllowed(''),
+        'Host 檢查：只允許本機時只接受 127.0.0.1、localhost、[::1]');
+      const lan = { lan: true, machine: 'MyPC' };
+      ok(hostAllowed('192.168.1.5:8000', lan) && hostAllowed('[fe80::1]:8000', lan) && hostAllowed('mypc:8000', lan) && hostAllowed('MyPC.local:8000', lan) && hostAllowed('localhost:8000', lan),
+        'Host 檢查（區網）：IP 位址、這台電腦的名稱與 .local 可以連');
+      ok(!hostAllowed('evil.example:8000', lan) && !hostAllowed('192.168.1.5.evil.example', lan) && !hostAllowed('999.1.1.1:8000', lan) && !hostAllowed('mypc.evil.example', lan),
+        'Host 檢查（區網）：其他網域一律拒絕');
+      ok(/if \(!hostAllowed\(req\.headers\.host, \{ lan: LAN_MODE \}\)\) return false;/.test(fs.readFileSync(path.join(PROJ, 'server.js'), 'utf8')), '伺服器：只允許本機與開放區網都檢查 Host');
+      // 實際開一個區網模式的伺服器（只綁 127.0.0.2，不會真的對外）：攻擊者網域的 Host 從這台電腦送出也讀不到金鑰
+      if (process.platform !== 'darwin') {
+        const os = require('os'), net = require('net'), { spawn } = require('child_process');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tavern-lan-'));
+        fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ openai: { api_key: 'sk-LAN-TEST' } }));
+        const port = await new Promise(rs => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => rs(p)); }); });
+        const child = spawn(process.execPath, ['server.js'], { cwd: PROJ, stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, PORT: String(port), HOST: '127.0.0.2', TAVERN_DATA_DIR: path.join(dir, 'data'), TAVERN_CONFIG: path.join(dir, 'config.json'), TAVERN_WINDOW_FILE: path.join(dir, 'window.json'), OPENAI_API_KEY: '' } });
+        let out = '';
+        const up = await new Promise(rs => {
+          const t = setTimeout(() => rs(false), 15000);
+          const on = d => { out += d; if (/已啟動/.test(out)) { clearTimeout(t); rs(true); } };
+          child.stdout.on('data', on); child.stderr.on('data', on);
+        });
+        const req2 = host => new Promise(rs => {
+          const q = require('http').request({ hostname: '127.0.0.2', port, path: '/api/keys/openai', headers: { Host: host, Origin: `http://${host}` } }, res => { let t = ''; res.on('data', c => (t += c)); res.on('end', () => rs({ status: res.statusCode, text: t })); });
+          q.on('error', e => rs({ status: 0, text: e.message })); q.end();
+        });
+        if (up) {
+          const evil = await req2(`evil.example:${port}`);
+          ok(evil.status === 403 && !evil.text.includes('sk-LAN-TEST'), '區網模式：攻擊者網域的 Host 從這台電腦送出也被拒絕，讀不到金鑰', JSON.stringify(evil));
+          const good = await req2(`127.0.0.2:${port}`);
+          ok(good.status === 200 && good.text.includes('sk-LAN-TEST'), '區網模式：用 IP 位址連線的這台電腦照常可以讀金鑰', good.status);
+        } else ok(false, '區網模式的測試伺服器沒有啟動', out.slice(-300));
+        child.kill();
+        await new Promise(rs => child.once('exit', rs).once('error', rs));
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Windows 偶爾還鎖著 */ }
+      }
+    }
+    // #3 縮短垃圾桶保留天數：先說會刪幾項、問一次
+    ok(/縮短並刪除/.test(fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8')), '縮短垃圾桶保留天數前先確認會永久刪除哪些項目');
+    // #5 區網另一台電腦的 LM Studio／Ollama 也算自己架的（不需要金鑰）
+    {
+      const { isSelfHosted } = require(path.join(PROJ, 'lib/providers.js'));
+      ok(isSelfHosted('http://localhost:1234/v1') && isSelfHosted('http://192.168.1.20:1234/v1') && isSelfHosted('http://10.0.0.5:11434/v1') && isSelfHosted('http://mypc.local:1234/v1')
+        && !isSelfHosted('https://api.openai.com/v1') && !isSelfHosted('不是網址'), '自己架的 API 位址：本機與區網都算（整理角色卡規則不再要求金鑰）');
+      ok(/isSelfHostedUrl\(s\.openai\?\.base_url\)/.test(fs.readFileSync(path.join(PROJ, 'public/js/main.js'), 'utf8')), '第一次啟動的引導：區網的本機模型也算設定好了');
+    }
+    // #7 生成到一半伺服器被強制結束：空白的回覆／空白的版本在打開對話時清掉，寫出一半的保留
+    {
+      const ic = (await j('POST', '/api/characters', { data: { name: '中斷測試' } })).data;
+      const icc = (await j('POST', `/api/characters/${ic.id}/chats`, {})).data;
+      const f = fs.readdirSync(path.join(TD, 'char')).map(d => path.join(TD, 'char', d, 'chats', icc.id + '.json')).find(p => fs.existsSync(p));
+      const raw = JSON.parse(fs.readFileSync(f, 'utf8'));
+      raw.messages.push(
+        { role: 'user', content: '一', time: 1 },
+        { role: 'assistant', content: '', swipes: ['舊的回應', ''], swipe_id: 1, swipe_reasoning: ['舊的思考', ''], swipe_timing: [{ first: 1, total: 5 }, null], time: 2, gen_pending: true },
+        { role: 'user', content: '二', time: 3 },
+        { role: 'assistant', content: '寫到一半', swipes: ['寫到一半'], swipe_id: 0, time: 4, gen_pending: true },
+        { role: 'user', content: '三', time: 5 },
+        { role: 'assistant', content: '', swipes: [''], swipe_id: 0, time: 6, gen_pending: true });
+      raw.updated = 12345;
+      fs.writeFileSync(f, JSON.stringify(raw));
+      r = await j('GET', `/api/characters/${ic.id}/chats/${icc.id}`);
+      const ms = r.data.messages || [];
+      const a1 = ms.find(m => m.time === 2), a2 = ms.find(m => m.time === 4);
+      ok(a1?.swipes?.length === 1 && a1.content === '舊的回應' && a1.swipe_id === 0 && a1.reasoning === '舊的思考' && a1.timing?.total === 5 && a1.swipe_reasoning.length === 1,
+        '中斷的重新生成：空白版本拿掉，回到上一個版本（思考、耗時跟著）', JSON.stringify(a1));
+      ok(a2?.content === '寫到一半' && !('gen_pending' in a2), '中斷時已經寫出一些內容：保留（可以按「繼續」）', JSON.stringify(a2));
+      ok(!ms.some(m => m.time === 6) && ms.at(-1)?.content === '三', '中斷時還沒寫出任何字的新回覆：整則拿掉', JSON.stringify(ms.at(-1)));
+      const saved = JSON.parse(fs.readFileSync(f, 'utf8'));
+      ok(!JSON.stringify(saved).includes('gen_pending') && saved.updated === 12345, '清掉的結果寫回檔案（不改對話清單的順序）');
+      // 正常生成完成後不會留下標記
+      // 另一個位址：前面的測試把 MOCK/v1 記成「不支援回報用量」（NO_USAGE_OPTION），這裡要檢查用量
+      await j('PUT', '/api/settings', { provider: 'openai', openai: { base_url: MOCK + '/u7/v1', model: 'mock-a' } });
+      const ev7 =await gen({ char_id: ic.id, chat_id: icc.id, mode: 'normal', user_message: '四' });
+      const d7 = ev7.find(e => e.type === 'done');
+      ok(d7 && !JSON.stringify(fs.readFileSync(f, 'utf8')).includes('gen_pending') && !d7.chat.messages_tail.some(m => 'gen_pending' in m), '生成完成後對話檔裡沒有「生成到一半」的標記', JSON.stringify(ev7.at(-1)).slice(0, 200));
+      // 生成結束只送回最後一則之後的訊息：from 是生成前最後一則的位置
+      ok(d7?.chat.messages_from === ms.length - 1 && d7.chat.messages_len === ms.length + 2 && d7.chat.messages_tail.length === 3, '生成結束：送回的訊息從生成前最後一則開始', JSON.stringify({ f: d7?.chat.messages_from, l: d7?.chat.messages_len, n: ms.length }));
+      // 停止後再存檔：檔案沒被別人改過時不重讀，用量照樣累加
+      r = await j('GET', `/api/characters/${ic.id}/chats/${icc.id}`);
+      ok(r.data.usage?.calls >= 1 && r.data.messages.at(-1).role === 'assistant', '生成存檔：用量照常累加', JSON.stringify(r.data.usage));
+      await j('DELETE', `/api/characters/${ic.id}`);
+    }
+    // #10 設定的格式：物件欄位、清單、開關要是對的型別（錯的格式會一直留在設定檔裡）
+    {
+      for (const [patch, what] of [[{ openai: 'xyz' }, 'openai 是文字'], [{ appearance: [1] }, 'appearance 是清單'], [{ world_ids: 'abc' }, 'world_ids 是文字'], [{ memory_enabled: 'yes' }, '開關是文字'],
+        [{ provider: 'nope' }, '未知的供應商'], [{ openai: { base_url: { x: 1 } } }, '巢狀欄位是物件'], [{ main_prompt: 5 }, '提示詞是數字']]) {
+        r = await j('PUT', '/api/settings', patch);
+        ok(r.status === 400, `設定格式錯誤時拒絕：${what}`, r.status);
+      }
+      r = await j('GET', '/api/settings');
+      ok(!('0' in r.data.settings.openai), '格式錯誤的設定沒有寫進設定檔');
+    }
+    // #11 內附 Node.js 的刪除、重建只有這台電腦可以
+    {
+      const sv = fs.readFileSync(path.join(PROJ, 'server.js'), 'utf8');
+      ok(/route\('DELETE', '\/api\/runtime'[^\n]*\n[^\n]*\n?\s*if \(!isLoopback\(req\)\)/.test(sv) && /route\('POST', '\/api\/runtime'[^\n]*\n\s*if \(!isLoopback\(req\)\)/.test(sv), '內附 Node.js 的刪除、重建：區網裝置不行');
+    }
+    // #12 每個回應都帶 nosniff 與不送 Referer
+    {
+      const rr = await fetch(B + '/');
+      const ra = await fetch(B + '/api/ping');
+      ok(rr.headers.get('x-content-type-options') === 'nosniff' && rr.headers.get('referrer-policy') === 'no-referrer' && ra.headers.get('x-content-type-options') === 'nosniff',
+        '回應標頭：nosniff、Referrer-Policy: no-referrer');
+      ok(/<meta name="referrer" content="no-referrer">/.test(fs.readFileSync(path.join(PROJ, 'public/index.html'), 'utf8')), '網頁也宣告不送出 Referer');
+    }
+    // #16 金鑰裡有中文、全形或空白：給看得懂的錯誤（不是「Cannot convert argument to a ByteString」）
+    {
+      r = await j('POST', '/api/models', { provider: 'openai', base_url: MOCK + '/v1', api_key: 'OpenAI 相容 API 的金鑰' });
+      ok(r.status === 400 && /不能用的字元/.test(r.data.error || ''), '金鑰有不能用的字元：說明要重新貼上金鑰', JSON.stringify(r.data));
+      const ex = JSON.parse(fs.readFileSync(path.join(PROJ, 'config.example.json'), 'utf8'));
+      ok(['openai', 'gemini', 'anthropic'].every(p => ex[p]?.api_key === ''), 'config.example.json：金鑰欄位是空的（照著複製不會被當成金鑰）');
+    }
+    // #2 方案 A：太大的匯入檔給正確的原因（不是「不是備份檔」）、解壓縮有上限（壓縮炸彈）、匯出前估算會不會匯不回來
+    {
+      const os = require('os'), zlib = require('zlib'), { execFileSync } = require('child_process');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tavern-import-'));
+      const try1 = buf => {
+        const f = path.join(dir, 'in.tavern'); fs.writeFileSync(f, buf);
+        try {
+          return execFileSync(process.execPath, ['-e', `try { require(${JSON.stringify(path.join(PROJ, 'lib/backup.js'))}).restore(require('fs').readFileSync(${JSON.stringify(f)})); console.log('OK') } catch (e) { console.log(e.status + ' ' + e.message) }`],
+            { cwd: PROJ, encoding: 'utf8', env: { ...process.env, TAVERN_DATA_DIR: path.join(dir, 'data'), TAVERN_CONFIG: path.join(dir, 'config.json'), TAVERN_WINDOW_FILE: path.join(dir, 'window.json'), TAVERN_IMPORT_MAX_CHARS: '20000' }, stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (e) { return String(e.stdout || '') + String(e.stderr || e.message); }
+      };
+      const big = zlib.gzipSync(Buffer.from(JSON.stringify({ app: 'ai-tavern', version: 1, files: { 'settings.json': { t: 'x'.repeat(50000) } } })));
+      let out = try1(big);
+      ok(/^413 /.test(out) && out.includes('超過匯入能處理的上限') && out.includes('userdata'), '匯入：解壓縮後太大時說明是超過上限（不是「不是備份檔」），並建議複製資料夾', out.slice(0, 200));
+      out = try1(zlib.gzipSync(Buffer.alloc(30 * 1024 * 1024))); // 30 MB 的 0 壓縮後只有幾十 KB
+      ok(/^413 /.test(out), '匯入：壓縮炸彈解壓到上限就停下，不會把記憶體吃光', out.slice(0, 200));
+      out = try1(zlib.gzipSync(Buffer.from('{壞掉')));
+      ok(/^400 /.test(out) && out.includes('內容格式不對'), '匯入：解壓縮得了但內容不是 JSON：說是格式不對', out.slice(0, 200));
+      fs.rmSync(dir, { recursive: true, force: true });
+      r = await j('GET', '/api/export/estimate?kind=all');
+      ok(r.status === 200 && r.data.chars > 0 && r.data.limit > 5e8 && r.data.too_big === false, '匯出前估算（全部資料）：大小與上限', JSON.stringify(r.data));
+      const bkName = (await j('GET', '/api/backups')).data.items?.[0]?.name;
+      r = bkName ? await j('GET', `/api/export/estimate?kind=backup&id=${encodeURIComponent(bkName)}`) : { status: 0 };
+      ok(r.status === 200 && r.data.chars > 0 && r.data.too_big === false, '匯出前估算（下載備份）', JSON.stringify(r.data));
+      r = await j('GET', '/api/export/estimate?kind=backup&id=..%5Cx');
+      ok(r.status === 400, '匯出前估算：備份名稱不對時回 400', r.status);
+      ok(/\/api\/export\/estimate/.test(fs.readFileSync(path.join(PROJ, 'public/js/core.js'), 'utf8')), '前端：匯出全部資料、下載備份之前先估算，太大就提醒匯不回來');
+    }
+    // 古卷軸（羊皮紙）主題：淺底深字，文字顏色的對比度夠（WCAG 一般文字至少 4.5:1）
+    {
+      const css = fs.readFileSync(path.join(PROJ, 'public/style.css'), 'utf8');
+      const blk = /html\[data-bg="paper"\] \{([\s\S]*?)\n\}/.exec(css)?.[1] || '';
+      const v = k => (new RegExp(`--${k}:\\s*(#[0-9a-f]{6})`, 'i').exec(blk) || [])[1];
+      const lum = hex => { const c = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(x => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4)); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+      const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+      const bgs = ['#fbf5e4', '#e9d7ae', '#f4e8cb', '#dcc28b']; // 對話框、牛皮紙對話框、視窗、最深的紙色
+      const low = ['text', 'muted', 'quote', 'accent', 'user-name', 'danger'].flatMap(k => bgs.map(b => [k, b, v(k) ? ratio(v(k), b) : 0])).filter(x => x[2] < 4.5);
+      ok(blk && /color-scheme: light/.test(blk) && !low.length, '古卷軸主題：文字顏色在各種紙色上的對比度都至少 4.5:1', JSON.stringify(low));
+      ok(/\['paper', '古卷軸/.test(fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8')) && /a\.background === 'paper'/.test(fs.readFileSync(path.join(PROJ, 'public/js/core.js'), 'utf8')),
+        '古卷軸主題：外觀設定可以選，自選的主題色在紙上會調深');
+      // 按鈕底色用你選的原色，上面的字依深淺挑深褐或米白（inkOn），對比度至少 4.5:1
+      const core = fs.readFileSync(path.join(PROJ, 'public/js/core.js'), 'utf8');
+      const fnSrc = name => /function NAME\([^)]*\) \{[\s\S]*?\n\}/.source.replace('NAME', name);
+      const libSrc = ['contrastRatio', 'inkOn', 'readableOn'].map(n => new RegExp(fnSrc(n)).exec(core)?.[0] || '').join('\n');
+      const lib = /function inkOn/.test(libSrc) && /function readableOn/.test(libSrc) ? new Function(`${libSrc}; return { inkOn, readableOn };`)() : {};
+      const inkOn = lib.inkOn || null;
+      const presets = [...fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8').matchAll(/\['(#[0-9a-f]{6})', '[^']+'\]/g)].map(m => m[1]);
+      const bad = inkOn ? [...presets, '#222222', '#ffffff', '#7a3a10'].map(c => [c, inkOn(c), ratio(c, inkOn(c))]).filter(x => x[2] < 4.5) : ['沒有 inkOn'];
+      ok(presets.length === 6 && inkOn && !bad.length && inkOn('#ff8fb8') === '#2b1606' && inkOn('#222222') === '#fff8ea',
+        '古卷軸主題：按鈕用自選的原色，上面的字自動挑深褐或米白，對比度都至少 4.5:1', JSON.stringify(bad));
+      // 文字用的主題色：古卷軸上調深、星空上調亮，只調到 4.5:1 為止；胡桃木在紙上維持原本的赭褐色
+      const readableOn = lib.readableOn || null;
+      const all = [...presets, '#222222', '#ffffff'];
+      const badText = readableOn ? all.flatMap(c => [[c, 'paper', readableOn(c, '#dcc28b', '#2b1606'), '#dcc28b'], [c, 'stars', readableOn(c, '#1e2c58', '#ffffff'), '#1e2c58']])
+        .filter(x => ratio(x[2], x[3]) < 4.5) : ['沒有 readableOn'];
+      ok(readableOn && !badText.length && readableOn('#7a3a10', '#dcc28b', '#2b1606') === '#7a3a10' && readableOn('#79a8ff', '#1e2c58', '#ffffff') === '#79a8ff',
+        '主題色：文字在古卷軸與星空上都至少 4.5:1，本來就清楚的不改（胡桃木在紙上維持原色）', JSON.stringify(badText));
+      ok(/\['#7a3a10', '胡桃木'\]/.test(fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8')), '主題色多了「胡桃木」（古卷軸原本的棕色）');
+      ok(/--accent-fill/.test(blk) && /html\[data-bg="paper"\] button\.primary \{[^}]*var\(--accent-fill\)[^}]*var\(--on-accent\)/.test(css) && /setProperty\('--accent-fill', a\.accent\)/.test(core),
+        '古卷軸主題：按鈕、切換開關的底色跟著自選的主題色（不調深）');
+    }
+    // 版面：視窗中等寬度（左邊有對話清單）時，頁首標題不會被選單擠成 0 寬、狀態欄蓋在訊息區上而不是把它擠窄
+    {
+      const css = fs.readFileSync(path.join(PROJ, 'public/style.css'), 'utf8'), cj = fs.readFileSync(path.join(PROJ, 'public/js/chat.js'), 'utf8');
+      ok(/\.head-info \{ flex: 1 1 180px; min-width: 120px; \}/.test(css) && /\.chat-sub \{[^}]*white-space: nowrap/.test(css), '頁首：標題至少留 120px，副標題不換行');
+      ok(/@media \(min-width: 761px\) and \(max-width: 1099px\) \{\s*#chatView\.sp-open #chatCol \{ margin-right: 0; \}/.test(css) && /matchMedia\('\(max-width: 1099px\)'\)/.test(cj),
+        '狀態欄：中等寬度時蓋在訊息區上（CSS 與 chat.js 的界線一致）');
+      ok(/#composer \{[^}]*container-type: inline-size/.test(css) && /@container \(max-width: 540px\)/.test(css), '輸入區：依自己的寬度收起 token 紀錄、縮小按鈕');
+    }
 
     // ===== 可有可無的修正 =====
     // 世界書沒有名稱（手動改過的檔案）：清單照樣列得出來

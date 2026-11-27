@@ -13,14 +13,14 @@ const { statusDefOf, hasStatusFields, initialStatus, currentStatus, applyReplySt
   worldDefOf, worldInitialStatus, worldCurrentStatus, applyWorldReplyStatus, applyWorldManualStatus, extractTags } = require('./lib/status');
 const { isNewerVersion } = require('./lib/version');
 const { buildPrompt, buildWorldPrompt, substitute, estimateTokens, memoryCutIndex, npcLabel, LANGUAGES, languageNote } = require('./lib/prompt');
-const { streamChat, listModels } = require('./lib/providers');
+const { streamChat, listModels, isSelfHosted } = require('./lib/providers');
 const { NARRATOR, DIRECTOR_MAX_TOKENS, DIRECTOR_TEMPERATURE, cleanSpeakerText, playRound, restorePresent } = require('./lib/turns');
 const backup = require('./lib/backup');
 const { stripThink, timeStamp, saveToDownloads, saveStreamToDownloads } = require('./lib/util');
 const zlib = require('zlib');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
-const { createLanAuth } = require('./lib/lan-auth');
+const { createLanAuth, hostAllowed } = require('./lib/lan-auth');
 const { writeZip } = require('./lib/zip');
 const appCache = require('./lib/app-cache');
 const WINDOW_FILE = process.env.TAVERN_WINDOW_FILE ? path.resolve(process.env.TAVERN_WINDOW_FILE) : path.join(__dirname, 'data', 'window.json');
@@ -346,6 +346,30 @@ function clampDeleted(chat) {
   for (const d of chat.deleted) d.i = Math.max(0, Math.min(Number.isInteger(d.i) ? d.i : n, n));
   if (!chat.deleted.length) delete chat.deleted;
 }
+/**
+ * 生成到一半伺服器被強制結束（當機、從工作管理員結束、主控台關閉超過等待時間）：生成前先存進去的空白回覆、
+ * 重新生成時先加上的空白版本（標著 gen_pending）會留在對話檔裡。這段對話沒有在生成時（打開對話、要生成前）：
+ * 空白的部分拿掉；已經寫出一些內容的保留（只拿掉標記，可以按「繼續」接著寫）。回傳有沒有改動
+ */
+function cleanInterrupted(chat) {
+  let changed = false;
+  for (let i = chat.messages.length - 1; i >= 0; i--) {
+    const m = chat.messages[i];
+    if (!m?.gen_pending) continue;
+    delete m.gen_pending; changed = true;
+    if (String(m.content || '').trim()) continue;
+    if (Array.isArray(m.swipes) && m.swipes.length > 1) {
+      // 重新生成留下的空白版本：拿掉它（各版本的思考、耗時、狀態一起），回到上一個版本
+      const k = Math.min(Math.max(0, m.swipe_id ?? m.swipes.length - 1), m.swipes.length - 1);
+      for (const key of ['swipes', 'swipe_reasoning', 'swipe_timing', 'swipe_status']) if (Array.isArray(m[key]) && m[key].length > k) m[key].splice(k, 1);
+      m.swipe_id = m.swipes.length - 1;
+      m.content = String(m.swipes[m.swipe_id] ?? '');
+      if (m.swipe_reasoning?.[m.swipe_id]) m.reasoning = m.swipe_reasoning[m.swipe_id]; else delete m.reasoning;
+      if (m.swipe_timing?.[m.swipe_id]) m.timing = m.swipe_timing[m.swipe_id]; else delete m.timing;
+    } else { chat.messages.splice(i, 1); shiftOnRemove(chat, i, 1); } // 新的一則還沒寫出任何字：整則拿掉
+  }
+  return changed;
+}
 /** 這個框刪除之後才出現的訊息（在框之後、時間比刪除晚）：還原會回到刪除當時，這些要先處理掉 */
 const newerThan = (chat, d) => chat.messages.map((m, j) => j).filter(j => j >= d.i && (chat.messages[j].time || 0) > d.time);
 function newChatFor(ownerKey, greetingIndex = 0, turnMode) {
@@ -493,6 +517,9 @@ async function handleGenerate(req, res) {
   if (jobs.has(jobKey(char_id, chat_id))) throw Object.assign(new Error('這段對話還在生成中，請等它完成或按「停止」'), { status: 409 });
   const owner = resolveOwner(char_id); // char_id 也可以是大世界的 world-<id>
   const chat = store.getChat(char_id, chat_id);
+  const cleaned = cleanInterrupted(chat); // 上次生成到一半伺服器被強制結束留下的空白回覆（下面第一次存檔時一起寫回）
+  // 生成結束時只送回這一則之後的訊息（之前的訊息生成期間不會變；清掉中斷的空白回覆時整段送回）
+  const deltaFrom = cleaned ? 0 : Math.max(0, chat.messages.length - 1);
   const settings = owner.settings;
   applyChatSettings(owner, chat); // 這段對話專屬的設定（聊天紀錄上限、玩家名字與人設、停用的世界書…）
   const world = chatWorld(owner, chat);
@@ -518,24 +545,40 @@ async function handleGenerate(req, res) {
   try { attachListener(job, res); } catch (e) { jobs.delete(jobKey(char_id, chat_id)); throw e; }
 
   // 存檔：保留生成期間改過的名稱、記憶與對話設定（生成中也可以在「對話設定」修改，不能被生成蓋回舊的）
+  // 對話檔很長時，每次存檔都重讀、解析整個檔案很浪費：記下自己上次寫入後的檔案狀態（修改時間與大小），
+  // 沒有變（這段時間沒有別人改過）就直接用記憶體裡的，不用重讀
+  let lastWrite = null;
   const save = () => {
     if (job.deleted) return false;
-    let fresh;
-    try { fresh = store.getChat(char_id, chat_id); } catch { return false; } // 對話已被刪除
-    chat.title = fresh.title;
-    for (const k of MEMORY_KEYS) chat[k] = fresh[k];
-    for (const k of CHAT_SETTING_KEYS) { if (k in fresh) chat[k] = fresh[k]; else delete chat[k]; }
-    if ('deleted' in fresh) chat.deleted = fresh.deleted; else delete chat.deleted; // 背景重新整理記憶會改到它
-    // 這次送出時用到的新 NPC 名字要留著（上面讀回的名單可能還沒有它）
+    const st = store.chatStat(char_id, chat_id);
+    if (!st) return false; // 對話已被刪除
+    if (!lastWrite || st.mtimeMs !== lastWrite.mtimeMs || st.size !== lastWrite.size) {
+      let fresh;
+      try { fresh = store.getChat(char_id, chat_id); } catch { return false; } // 對話已被刪除
+      chat.title = fresh.title;
+      for (const k of MEMORY_KEYS) chat[k] = fresh[k];
+      for (const k of CHAT_SETTING_KEYS) { if (k in fresh) chat[k] = fresh[k]; else delete chat[k]; }
+      if ('deleted' in fresh) chat.deleted = fresh.deleted; else delete chat.deleted; // 背景重新整理記憶會改到它
+      // 用量：以檔案裡的為準（背景整理記憶也會累加）
+      chat.usage = fresh.usage;
+    }
+    // 這次送出時用到的新 NPC 名字要留著（讀回的名單可能還沒有它）
     if (addedNpcs.size) chat.npcs = [...new Set([...(chat.npcs || []), ...addedNpcs])];
-    // 用量：以檔案裡的為準（背景整理記憶也會累加），再加上這次還沒存的部分
-    chat.usage = pendingUsage ? sumUsage(fresh.usage, pendingUsage) : fresh.usage;
+    // 再加上這次還沒存的用量
+    if (pendingUsage) chat.usage = sumUsage(chat.usage, pendingUsage);
     pendingUsage = null;
     store.saveChat(char_id, chat);
+    lastWrite = store.chatStat(char_id, chat_id);
     return true;
+  };
+  /** 生成結束時送回畫面的對話：訊息只帶 deltaFrom 之後的（長對話不用整段送來送去），其他欄位照常 */
+  const chatOut = () => {
+    const { messages, ...meta } = chat;
+    return { ...meta, msg_ver: msgVer(chat), messages_from: deltaFrom, messages_len: messages.length, messages_tail: messages.slice(deltaFrom) };
   };
   let pendingUsage = null;
   const finalize = (target, prefix, text) => {
+    delete target.gen_pending; // 生成結束（完成、停止或出錯）：不再是「生成到一半」
     target.content = prefix + text;
     if (target.swipes) target.swipes[target.swipe_id ?? 0] = target.content;
     target.time = Date.now();
@@ -640,6 +683,7 @@ async function handleGenerate(req, res) {
       const hadStatus = Array.isArray(last.swipe_status);
       if (hadStatus) last.swipe_status = swipeStatus(last);
       last.swipes.push(''); last.swipe_reasoning.push(''); last.swipe_timing.push(null); if (hadStatus) last.swipe_status.push(null); last.swipe_id = last.swipes.length - 1; last.content = ''; delete last.reasoning; delete last.timing;
+      last.gen_pending = true; // 伺服器中途被強制結束時，下次打開對話會拿掉這個空白的版本（cleanInterrupted）
       save();
       await generateInto(last, '', turns ? last.speaker || NARRATOR : null);
       if (turns && 'present_before' in last) { last.present_after = Array.isArray(chat.present) ? [...chat.present] : null; save(); } // 新版本沒有離場
@@ -647,7 +691,7 @@ async function handleGenerate(req, res) {
       save();
       await generateInto(last, last.content, turns ? last.speaker || NARRATOR : null);
     } else if (!turns) {
-      const target = { role: 'assistant', content: '', swipes: [''], swipe_id: 0, time: Date.now() };
+      const target = { role: 'assistant', content: '', swipes: [''], swipe_id: 0, time: Date.now(), gen_pending: true };
       chat.messages.push(target); save();
       await generateInto(target, '', null);
     } else {
@@ -665,7 +709,7 @@ async function handleGenerate(req, res) {
         aborted: () => job.ac.signal.aborted,
         speak: async (sp, note) => {
           // present_before：說話前誰在場（重新生成這則時回到這個狀態）
-          const target = { role: 'assistant', content: '', swipes: [''], swipe_id: 0, time: Date.now(), speaker: sp, present_before: Array.isArray(chat.present) ? [...chat.present] : null };
+          const target = { role: 'assistant', content: '', swipes: [''], swipe_id: 0, time: Date.now(), speaker: sp, present_before: Array.isArray(chat.present) ? [...chat.present] : null, gen_pending: true };
           chat.messages.push(target); save();
           await generateInto(target, '', sp, note);
           return target;
@@ -704,7 +748,7 @@ async function handleGenerate(req, res) {
     // 編輯過已經整理進記憶的訊息：這次生成完成後才從頭重新整理（之後要壓縮時會等它整理完再接著做）
     const resum = chat.memory_stale ? autoResummarize(char_id, chat_id, chat) : false;
     const memory_updating = !!resum || maybeAutoCompress(char_id, chat_id, chat, owner);
-    finish({ type: 'done', stop_reason: result.stop_reason, model: result.model, notice, chat: withVer(chat), memory_updating });
+    finish({ type: 'done', stop_reason: result.stop_reason, model: result.model, notice, chat: chatOut(), memory_updating });
   } catch (err) {
     // 中斷或錯誤：保留已經產生的部分
     let saveErr = null;
@@ -717,11 +761,11 @@ async function handleGenerate(req, res) {
         save();
       } else save(); // 兩位角色之間中斷、導演規劃完才出錯：在場狀態、用量照樣記下來
     } catch (e) { saveErr = e; console.warn('[generate] 存檔失敗：', e.message || e); } // 存檔失敗也一定要結束這次生成，不然這段對話會一直卡在「生成中」
-    if (job.ac.signal.aborted && !saveErr) finish({ type: 'done', stopped: true, chat: withVer(chat) });
+    if (job.ac.signal.aborted && !saveErr) finish({ type: 'done', stopped: true, chat: chatOut() });
     else {
       const msg = saveErr ? `存檔失敗（${saveErr.message || saveErr}），已產生的內容可能沒有存到；檔案可能被防毒軟體或雲端同步鎖住，請稍後再試` : err.message || String(err);
       if (!saveErr) console.warn('[generate]', msg);
-      finish({ type: 'error', error: msg, chat: withVer(chat) });
+      finish({ type: 'error', error: msg, chat: chatOut() });
     }
   }
 
@@ -1020,6 +1064,27 @@ function checkRanges(obj) {
   }
 }
 /**
+ * 設定欄位的格式（畫面上不會送出錯的格式，這裡擋手動送出的）：格式錯的值存進去之後會一直留在設定檔裡，
+ * 例如 openai: "xyz" 合併後會變成 { "0": "x", "1": "y", "2": "z", … }，之後也拿不掉
+ */
+const OBJ_SETTINGS = ['openai', 'gemini', 'anthropic', 'appearance'];
+const BOOL_SETTINGS = ['memory_enabled', 'memory_auto', 'use_card_system_prompt', 'first_run_done', 'update_check', 'external_images'];
+const TEXT_SETTINGS = ['main_prompt', 'world_prompt', 'memory_prompt', 'user_persona', 'user_name'];
+function checkShapes(obj) {
+  const bad = msg => Object.assign(new Error(msg), { status: 400 });
+  for (const k of OBJ_SETTINGS) {
+    if (!(k in obj)) continue;
+    const v = obj[k];
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw bad(`「${k}」的格式不對（要是物件）`);
+    for (const [sk, sv] of Object.entries(v)) if (sv !== null && !['string', 'number', 'boolean'].includes(typeof sv)) throw bad(`「${k}.${sk}」的格式不對`);
+  }
+  if ('provider' in obj && !['openai', 'gemini', 'anthropic'].includes(obj.provider)) throw bad('未知的供應商');
+  if ('world_ids' in obj && !(Array.isArray(obj.world_ids) && obj.world_ids.every(x => typeof x === 'string' && /^[\w-]{1,80}$/.test(x))))
+    throw bad('全域世界書（world_ids）要是世界書 ID 的清單');
+  for (const k of BOOL_SETTINGS) if (k in obj && typeof obj[k] !== 'boolean') throw bad(`${k} 要是 true 或 false`);
+  for (const k of TEXT_SETTINGS) if (k in obj && typeof obj[k] !== 'string') throw bad(`「${k}」要是文字`);
+}
+/**
  * 開放區網（HOST=0.0.0.0）時，區網裡的其他裝置不能改 API 位址：
  * 不然可以把位址改成自己架的伺服器，酒館就會帶著這台電腦存的金鑰連過去（等於拿到金鑰）。
  * patch：{ openai: { base_url }, gemini: { base_url }, ... }；位址和目前存的一樣就放行（儲存設定時整份送出）
@@ -1074,9 +1139,8 @@ route('PUT', '/api/settings', async (req, res) => {
   // 模型設定檔（清單與使用中的是哪一個）只能透過 /api/profiles 修改：一定有一個在使用中，不能從這裡改成「不使用」
   const { user_avatar, bg_ver, personas: _personas, active_persona: _active, profiles: _profiles, active_profile: _activeProfile, ...patch } = await readJsonBody(req);
   checkRanges(patch);
+  checkShapes(patch);
   guardApiUrl(req, patch);
-  if ('update_check' in patch && typeof patch.update_check !== 'boolean') throw Object.assign(new Error('update_check 要是 true 或 false'), { status: 400 });
-  if ('external_images' in patch && typeof patch.external_images !== 'boolean') throw Object.assign(new Error('external_images 要是 true 或 false'), { status: 400 });
   if ('reply_language' in patch && patch.reply_language !== 'custom' && !Object.hasOwn(LANGUAGES, patch.reply_language)) throw Object.assign(new Error('未知的對話語言'), { status: 400 });
   if ('language_custom' in patch && (typeof patch.language_custom !== 'string' || patch.language_custom.length > 4000)) throw Object.assign(new Error('自訂的語言提醒要是文字，最多 4000 字'), { status: 400 });
   const saved = store.saveSettings(patch);
@@ -1232,8 +1296,15 @@ route('POST', '/api/backups/:name/restore', async (req, res, p) => {
   send(res, 200, backup.restore(bundle));
 });
 route('GET', '/api/export', (req, res) => sendExport(res, EXPORTS.all()));
+// 匯出全部資料、下載備份之前：估算檔案會不會大到匯不回來（kind=all，或 kind=backup&id=備份名稱）
+route('GET', '/api/export/estimate', (req, res, p, q) => {
+  const kind = q.get('kind') === 'backup' ? 'backup' : 'all';
+  send(res, 200, backup.exportEstimate(kind, q.get('id') || ''));
+});
 route('POST', '/api/import', async (req, res) => {
-  const buf = await readBody(req, 1024 * 1024 * 1024); // 圖片多的時候可能很大：上限 1GB
+  // 上限 600 MB：解壓縮後超過約 5 億字元就解析不了（lib/backup.js 的 IMPORT_MAX_CHARS），
+  // 圖片的 base64 壓縮後大約剩四分之三，再大的檔案一定匯不進來，就不必整個讀進記憶體
+  const buf = await readBody(req, 600 * 1024 * 1024);
   stopJobs(() => true);
   await stopMemoryJobs();
   // 匯入的可能是別人的檔案：連線設定沿用目前的（不然你的金鑰會被送到檔案裡設定的 API 位址）
@@ -1249,13 +1320,16 @@ const runtimeStatus = () => {
   return { bundled: size > 0, size, using_bundled: runtimeNode.runningBundled(), installed_version: runtimeNode.runningBundled() ? '' : process.version, windows: process.platform === 'win32' };
 };
 route('GET', '/api/runtime', (req, res) => send(res, 200, runtimeStatus()));
+// 刪除、重建只有這台電腦可以（和清理快取、直接存檔一樣；區網裡的其他裝置只能查看）
 route('DELETE', '/api/runtime', (req, res) => {
+  if (!isLoopback(req)) return send(res, 403, { error: '只有執行酒館的這台電腦可以刪除內附的 Node.js' });
   if (runtimeNode.runningBundled()) return send(res, 409, { error: '酒館現在就是用內附的 Node.js 在執行（這台電腦沒有安裝 Node.js），不能刪除' });
   try { fs.rmSync(runtimeNode.EXE, { force: true }); } // README.txt 留著：打包時會換成實際複製的版本
   catch (e) { return send(res, 500, { error: `刪除失敗：${e.message}` }); }
   send(res, 200, runtimeStatus());
 });
 route('POST', '/api/runtime', (req, res) => {
+  if (!isLoopback(req)) return send(res, 403, { error: '只有執行酒館的這台電腦可以重新建立內附的 Node.js' });
   if (process.platform !== 'win32') return send(res, 400, { error: '內附版本只支援 Windows' });
   if (runtimeNode.runningBundled()) return send(res, 409, { error: '酒館正在用內附的 Node.js 執行，不需要重新建立' });
   runtimeNode.copyInstalledNode();
@@ -1275,7 +1349,7 @@ route('GET', '/api/profiles', (req, res) => send(res, 200, store.listProfiles())
 route('POST', '/api/profiles', async (req, res) => {
   const { name, fields, key } = await readJsonBody(req);
   const clean = fields && typeof fields === 'object' ? Object.fromEntries(store.PROFILE_FIELDS.filter(k => k in fields).map(k => [k, fields[k]])) : null;
-  if (clean) { checkRanges(clean); guardApiUrl(req, clean); }
+  if (clean) { checkRanges(clean); checkShapes(clean); guardApiUrl(req, clean); }
   // 區網裝置也不能改金鑰（和 PUT /api/keys 一樣）
   if (typeof key === 'string' && key.trim() && !isLoopback(req)) return send(res, 403, { error: '只有執行酒館的這台電腦可以修改 API 金鑰' });
   if (clean && 'provider' in clean && !['openai', 'gemini', 'anthropic'].includes(clean.provider)) throw Object.assign(new Error('未知的供應商'), { status: 400 });
@@ -1658,7 +1732,14 @@ route('POST', '/api/characters/:id/chats', async (req, res, p) => {
  */
 const msgVer = c => crypto.createHash('sha1').update(JSON.stringify(c.messages || [])).digest('hex').slice(0, 16);
 const withVer = c => (c && Array.isArray(c.messages) ? { ...c, msg_ver: msgVer(c) } : c);
-route('GET', '/api/characters/:id/chats/:chat', (req, res, p) => send(res, 200, withVer(store.getChat(p.id, p.chat))));
+route('GET', '/api/characters/:id/chats/:chat', (req, res, p) => {
+  let chat = store.getChat(p.id, p.chat);
+  // 沒有在生成，卻有「生成到一半」的空白回覆：上次伺服器被強制結束留下的，打開時清掉（不改對話清單的順序）
+  if (!jobs.has(jobKey(p.id, p.chat)) && cleanInterrupted(chat)) {
+    try { chat = store.saveChat(p.id, chat, { touch: false }); } catch (e) { console.warn('[對話] 清掉中斷留下的空白回覆時存檔失敗：', e.message || e); }
+  }
+  send(res, 200, withVer(chat));
+});
 // 清空聊天用：角色卡／世界「目前」的開場白（改過或刪掉的開場白會重新帶入）；{{user}} 用這段對話自己的名字
 route('GET', '/api/characters/:id/chats/:chat/opening', (req, res, p, query) => {
   const owner = resolveOwner(p.id);
@@ -1701,7 +1782,7 @@ route('PUT', '/api/characters/:id/chats/:chat', async (req, res, p) => {
   if (body.snapshot === 'clear' && chat.messages.length) store.snapshotChatToTrash(p.id, chat);
   else if (body.snapshot === 'delete' && Array.isArray(body.messages) && body.messages.length < chat.messages.length) store.snapshotChatToTrash(p.id, chat, '（刪除訊息前）');
   const oldUpto = chat.memory_upto || 0;
-  if (Array.isArray(body.messages)) chat.messages = body.messages;
+  if (Array.isArray(body.messages)) { for (const m of body.messages) delete m.gen_pending; chat.messages = body.messages; } // 標記只由生成流程管理
   // 清空聊天：「訊息已刪除」的框一起清掉；其他整份換掉訊息的情況，框的位置不能超過訊息數
   if (body.snapshot === 'clear') { delete chat.deleted; delete chat.memory_stale; }
   else if (Array.isArray(body.messages)) clampDeleted(chat);
@@ -1799,6 +1880,7 @@ route('PUT', '/api/characters/:id/chats/:chat/messages/:index', async (req, res,
   // 改了已經整理進記憶的訊息內容：記憶先不動，下次生成完成後再重新整理
   const memory_stale = chat.messages[i].content !== body.message.content && i < (chat.memory_upto || 0) && !!chat.memory?.trim();
   if (memory_stale) chat.memory_stale = true;
+  delete body.message.gen_pending; // 標記只由生成流程管理
   chat.messages[i] = body.message;
   if (body.message.npc && !(chat.npcs || []).includes(cleanNpc(body.message.npc))) chat.npcs = [...(chat.npcs || []), cleanNpc(body.message.npc)].filter(Boolean).slice(0, 30);
   store.saveChat(p.id, chat);
@@ -1995,10 +2077,10 @@ route('DELETE', '/api/bigworlds/:id', async (req, res, p) => {
 // body：{ world_prompt, members: [{ id, sys_mode, sys_custom }], estimate_only }
 // estimate_only：只回傳 API 是否設定好、使用的模型與預估用量，不呼叫 AI
 const organize = require('./lib/organize');
-/** API 有沒有設定好（沒有金鑰、沒有選模型時回傳原因；本機模型不需要金鑰） */
+/** API 有沒有設定好（沒有金鑰、沒有選模型時回傳原因；本機或區網自己架的模型不需要金鑰） */
 function apiProblem(s) {
   const model = ((s[s.provider] || {}).model || '').trim();
-  const local = s.provider === 'openai' && /\/\/(127\.0\.0\.1|localhost|\[::1\])/i.test(s.openai?.base_url || '');
+  const local = s.provider === 'openai' && isSelfHosted(s.openai?.base_url);
   if (!local && !store.keyStatus()[s.provider]?.set) return '尚未設定 API 金鑰';
   if (!model) return '尚未選擇模型';
   return '';
@@ -2093,18 +2175,17 @@ route('DELETE', '/api/worlds/:id', (req, res, p) => { store.deleteWorld(p.id); s
 route('GET', '/api/worlds/:id/export', (req, res, p) => sendExport(res, EXPORTS.world({ id: p.id })));
 
 // ---------- 請求來源檢查 ----------
-// 1. Host 必須是本機：擋掉 DNS rebinding（惡意網域把自己解析成 127.0.0.1，假裝是同一個網站）
+// 1. Host 必須是酒館自己的位址：擋掉 DNS rebinding（惡意網域把自己解析成 127.0.0.1 或這台電腦的區網位址，假裝是同一個網站）。
+//    開放區網時也一樣要檢查（只多接受 IP 位址與這台電腦的名稱），不然這台電腦的瀏覽器開到惡意網頁時，
+//    那個網頁的請求算「這台電腦自己」、不用存取碼，就能讀走金鑰（見 lib/lan-auth.js 的 hostAllowed）
 // 2. 瀏覽器帶來的 Origin 必須是酒館自己：擋掉你瀏覽其他網站時，那個網頁偷偷對酒館送出請求
-// 設成 HOST=0.0.0.0 開放區網時，Host 會是電腦的區網位址，只檢查 Origin
-const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 /** 這個請求是不是從這台電腦自己發出的（看連線的來源位址，不看可以偽造的標頭） */
 function isLoopback(req) { return /^(127\.|::1$|::ffff:127\.)/.test(req.socket?.remoteAddress || ''); }
-const hostName = h => String(h || '').toLowerCase().replace(/:\d+$/, '');
 // 開放區網時（HOST 不是本機位址），其他裝置要先輸入存取碼（lib/lan-auth.js）；只允許本機時完全不用
 const LAN_MODE = !['127.0.0.1', 'localhost', '::1'].includes(HOST);
 const lanAuth = LAN_MODE ? createLanAuth({ file: path.join(path.dirname(WINDOW_FILE), 'lan-code.txt'), fixed: process.env.TAVERN_ACCESS_CODE }) : null;
 function requestAllowed(req, isApi) {
-  if (['127.0.0.1', 'localhost', '::1'].includes(HOST) && !LOCAL_HOSTS.has(hostName(req.headers.host))) return false;
+  if (!hostAllowed(req.headers.host, { lan: LAN_MODE })) return false;
   if (!isApi) return true;
   if (req.headers['sec-fetch-site'] === 'cross-site') return false;
   const origin = req.headers.origin;
@@ -2114,6 +2195,10 @@ function requestAllowed(req, isApi) {
 
 // ---------- 伺服器 ----------
 const server = http.createServer(async (req, res) => {
+  // 每個回應都帶：瀏覽器不要自己猜檔案類型（例如把上傳的圖片當成網頁執行）；
+  // 開外部圖片、連結時不要送出 Referer（對方網站不會知道你在用 http://127.0.0.1:8000 的酒館）
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
   try {
     const url = new URL(req.url, 'http://localhost');
     // 格式錯誤的網址（例如 /%E0）：回傳 400，不能讓伺服器當掉（任何網頁都能送出這種請求）

@@ -37,6 +37,7 @@ async function enterChat(charId, chatId) {
   $('#status').textContent = ''; $('#status').title = '';
   showUsage();
   state.renderChat = null; // 每次打開對話都依設定重新決定先畫幾則
+  state.profiles = null; // 模型設定檔可能在設定頁改過：打開對話時重新讀一次
   renderSide(); renderHead(); renderMessages();
   $('#input').focus();
   // 從搜尋結果打開：捲到那則訊息
@@ -158,9 +159,12 @@ async function speakAs(id) {
 }
 
 // 對話頁右上角的模型選單：切換模型設定檔（下一次生成就會使用）
-async function renderModelPick() {
+// refresh：重新向伺服器讀取設定檔清單（打開對話、切換設定檔時）。renderHead 每次重畫都會呼叫這裡，
+// 平常沿用讀過的清單（以前生成一次就要多問伺服器好幾次）
+async function renderModelPick(refresh = false) {
   const sel = $('#modelPick');
-  const [prof, st] = await Promise.all([api('GET', '/api/profiles'), state.settings ? null : api('GET', '/api/settings')]);
+  if (refresh || !state.profiles) state.profiles = api('GET', '/api/profiles').catch(e => { state.profiles = null; throw e; }); // 存 Promise：同時好幾次重畫只讀一次
+  const [prof, st] = await Promise.all([state.profiles, state.settings ? null : api('GET', '/api/settings')]);
   if (st) state.settings = st.settings;
   const s = state.settings || {};
   const curModel = (s[s.provider] || {}).model || '未選模型';
@@ -176,7 +180,7 @@ async function renderModelPick() {
       state.settings = r.settings;
       toast(`已切換到「${r.profiles.find(p => p.id === sel.value)?.name}」，下一次生成開始使用`);
     } catch (e) { fail(e); }
-    renderModelPick().catch(fail);
+    renderModelPick(true).catch(fail);
   };
   renderThinkPick();
 }
@@ -723,11 +727,13 @@ $('#btnCloseSide').onclick = () => $('#sidebar').classList.remove('open');
 
 // ===================== 狀態欄面板 =====================
 // 對話頁右側：圖片 → 角色狀態 → 使用者狀態（使用者狀態一律貼齊底部）。設計稿：docs/狀態欄設計稿.md
-// 電腦版佔一欄，開關記在這台裝置（localStorage）；手機版（≤760px）從右邊滑出蓋在畫面上，每次進對話預設關閉
+// 寬螢幕（≥1100px）佔一欄、把訊息區往左推，開關記在這台裝置（localStorage）；
+// 比較窄時（手機，或左邊有對話清單、訊息區會被擠得太窄的中等寬度視窗）從右邊滑出蓋在訊息區上，每次進對話預設關閉。
+// 界線和 style.css 的「狀態欄蓋在訊息區上」那段 @media 相同
 const STATUS_PANEL_KEY = 'tavern.statusPanel';
-const narrowMq = matchMedia('(max-width: 760px)');
-/** 這台裝置記住的開關（只有電腦版算數；手機版一律先關著） */
-const statusPanelPref = () => !narrowMq.matches && lsGet(STATUS_PANEL_KEY) === '1';
+const overlayMq = matchMedia('(max-width: 1099px)');
+/** 這台裝置記住的開關（只有寬螢幕算數；蓋在畫面上的寬度一律先關著） */
+const statusPanelPref = () => !overlayMq.matches && lsGet(STATUS_PANEL_KEY) === '1';
 function setStatusPanel(open, { remember = true } = {}) {
   const view = $('#chatView');
   // 使用者按的才滑動；進對話、視窗寬度跨過界線時直接切換（不然每次進對話面板都滑一次）
@@ -739,15 +745,15 @@ function setStatusPanel(open, { remember = true } = {}) {
   btn.classList.toggle('on', open);
   btn.setAttribute('aria-pressed', String(open));
   btn.title = open ? '收起狀態欄' : '狀態欄（顯示角色圖片與狀態）';
-  if (remember && !narrowMq.matches) lsSet(STATUS_PANEL_KEY, open ? '1' : '0'); // 手機版的開關不影響電腦版記住的設定
+  if (remember && !overlayMq.matches) lsSet(STATUS_PANEL_KEY, open ? '1' : '0'); // 蓋在畫面上時的開關不影響寬螢幕記住的設定
 }
 $('#btnStatusPanel').onclick = () => setStatusPanel(!$('#chatView').classList.contains('sp-open'));
 $('#btnSpExpand').onclick = () => setStatusPanel(true); // 訊息區右緣的「<<」
 $('#btnSpCollapse').onclick = () => setStatusPanel(false); // 訊息區右緣的「>>」
 $('#btnCloseStatus').onclick = () => setStatusPanel(false);
 $('#spMask').onclick = () => setStatusPanel(false);
-// 視窗寬度跨過手機版的界線：變窄時先關掉（不要突然蓋住畫面），變寬時回到記住的開關
-narrowMq.addEventListener('change', () => setStatusPanel(statusPanelPref(), { remember: false }));
+// 視窗寬度跨過界線：變窄時先關掉（不要突然蓋住畫面），變寬時回到記住的開關
+overlayMq.addEventListener('change', () => setStatusPanel(statusPanelPref(), { remember: false }));
 
 /** 面板裡的一行：「名稱：內容」（內容可換行） */
 /** 欄位名稱：不到 4 個字時平均分散在 4 個字的寬度裡（心　　情：），冒號對齊；更長的照原本寬度往右推 */
@@ -1527,6 +1533,18 @@ async function generate(mode, userMessage, opts = {}) {
   const body = JSON.stringify({ char_id: state.char.id, chat_id: state.chatId, mode, user_message: userMessage, speaker: opts.speaker, interrupt: opts.interrupt, npc: opts.npc, narration: opts.narration });
   await runStream(signal => fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal, body }), { prefix, restore: opts.restore });
 }
+/**
+ * 生成結束時伺服器送回的對話：訊息只帶 messages_from 之後的（messages_tail），前面的生成期間不會變，沿用畫面上的。
+ * 畫面上的訊息比 messages_from 少（對不上）就重新讀取整段；舊格式（整段 messages）直接用
+ */
+async function mergeChat(c, charId, chatId) {
+  if (!c || Array.isArray(c.messages)) return c;
+  const { messages_from: from, messages_tail: tail, messages_len: len, ...meta } = c;
+  const cur = state.chat?.messages;
+  if (Array.isArray(cur) && Array.isArray(tail) && Number.isInteger(from) && cur.length >= from && from + tail.length === len)
+    return { ...meta, messages: [...cur.slice(0, from), ...tail] };
+  return api('GET', `/api/characters/${charId}/chats/${chatId}`).catch(() => state.chat);
+}
 /** 接上進行中的生成（例如從首頁或其他對話切回來） */
 function resumeStream(charId, chatId) {
   return runStream(signal => fetch(`/api/generate/${charId}/${chatId}`, { signal }), { resume: true });
@@ -1576,6 +1594,13 @@ async function runStream(open, { prefix = '', resume = false, restore = '' }) {
     if (box.scrollHeight - box.scrollTop - box.clientHeight < 200) box.scrollTop = box.scrollHeight;
   };
 
+  // 多久重畫一次：每次重畫都要把整則訊息重新消毒、排版，回覆越長越花時間（手機尤其明顯），所以越長間隔越久；
+  // 視窗在背景（縮小、切到別的分頁）時看不到，1 秒一次就好。完成時伺服器送的 msg_end 會換上最後的完整內容
+  const paintDelay = () => {
+    if (document.hidden) return 1000;
+    const n = prefix.length + text.length + reasoning.length;
+    return n < 3000 ? 40 : n < 10000 ? 100 : 250;
+  };
   // 伺服器還沒收下訊息（拒絕了，或根本連不上）：把打好的字放回輸入框（也會存回草稿），不要讓它不見
   const putBack = () => { if (restore && here() && !$('#input').value.trim()) { $('#input').value = restore; autoGrow(); } };
   let opened = false;
@@ -1613,7 +1638,7 @@ async function runStream(open, { prefix = '', resume = false, restore = '' }) {
             // 重新接上：補上離開期間已經產生的內容
             prefix = state.chat.messages[idx]?.content || '';
             text = ev.text || ''; reasoning = ev.reasoning || '';
-            if (!pending) { pending = true; setTimeout(paint, 40); }
+            if (!pending) { pending = true; setTimeout(paint, paintDelay()); }
           } else if (ev.message) { prefix = ev.message.content || ''; text = ''; reasoning = ''; }
           textEl()?.classList.add('cursor');
           if (!prefix && !text && !reasoning) startWait(); else stopWait(); // 「繼續」時已經有內容，不顯示等待
@@ -1631,10 +1656,10 @@ async function runStream(open, { prefix = '', resume = false, restore = '' }) {
           }
         } else if (ev.type === 'text') {
           text += ev.text;
-          if (!pending) { pending = true; setTimeout(paint, 40); }
+          if (!pending) { pending = true; setTimeout(paint, paintDelay()); }
         } else if (ev.type === 'reasoning') {
           reasoning += ev.text;
-          if (!pending) { pending = true; setTimeout(paint, 40); }
+          if (!pending) { pending = true; setTimeout(paint, paintDelay()); }
         } else if (ev.type === 'director') {
           // 大世界：導演正在規劃這一輪（規劃內容放在狀態列的提示裡）
           if (here()) {
@@ -1658,11 +1683,11 @@ async function runStream(open, { prefix = '', resume = false, restore = '' }) {
             setBusy(true);
           }
         } else if (ev.type === 'done') {
-          if (here()) { state.chat = ev.chat; renderSpeakerBar(); showUsage(); } // 在場角色可能變了
+          if (here()) { state.chat = await mergeChat(ev.chat, charId, chatId); renderSpeakerBar(); showUsage(); } // 在場角色可能變了
           if (ev.notice && here()) toast(ev.notice, !text.trim(), 12000);
           if (ev.memory_updating) watchMemory(charId, chatId);
         } else if (ev.type === 'error') {
-          if (here()) state.chat = ev.chat;
+          if (here()) state.chat = await mergeChat(ev.chat, charId, chatId);
           throw new Error(ev.error);
         }
       }

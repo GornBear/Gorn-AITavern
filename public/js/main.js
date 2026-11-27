@@ -70,7 +70,7 @@ function showCorruptBanner(files) {
 // 按「前往」只是去那一頁看看，引導下次啟動還會出現（直到按「知道了」）
 function openFirstRunGuide() {
   const s = state.settings || {}, keys = state.keys || {};
-  const local = s.provider === 'openai' && /127\.0\.0\.1|localhost/.test(s.openai?.base_url || '');
+  const local = s.provider === 'openai' && isSelfHostedUrl(s.openai?.base_url);
   const apiDone = !!(keys[s.provider]?.set || local) && !!(s[s.provider]?.model || '').trim();
   const nameDone = !!s.user_name && s.user_name !== 'User'; // User＝預設設定檔的名字，還沒改過
   const runtimeTip = h('p', { class: 'muted small-note', hidden: true });
