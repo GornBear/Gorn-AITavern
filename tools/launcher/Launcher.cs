@@ -17,9 +17,9 @@ using System.Windows.Forms;
 [assembly: AssemblyCompany("葛恩")]                 // 公司
 [assembly: AssemblyCopyright("© 2026 葛恩")]        // 著作權
 [assembly: AssemblyDescription("AI 酒館啟動程式（啟動本機伺服器並開啟應用程式視窗）Made by 葛恩 with Claude.")] // 註解
-[assembly: AssemblyVersion("1.7.0.0")]
-[assembly: AssemblyFileVersion("1.7.0.0")]          // 檔案版本
-[assembly: AssemblyInformationalVersion("1.7.0")]   // 產品版本（和 package.json 一致）
+[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]          // 檔案版本
+[assembly: AssemblyInformationalVersion("2.0.0")]   // 產品版本（package.json 是 2.0.0-beta 這類預先發布版時，這裡只寫 2.0.0）
 
 static class Launcher
 {
@@ -41,6 +41,22 @@ static class Launcher
         // 優先使用電腦上安裝的 Node.js；沒有安裝時，若資料夾裡有內附版本（runtime\node.exe）就詢問要不要用它
         // （環境變數 TAVERN_IGNORE_SYSTEM_NODE=1 會假裝沒有安裝，只用來測試詢問視窗）
         string node = Environment.GetEnvironmentVariable("TAVERN_IGNORE_SYSTEM_NODE") == "1" ? null : FindNode();
+        // 安裝的 Node.js 太舊（低於 MinNode）：有內附版本就改用內附的（照下面的流程詢問，說明是版本太舊），沒有就說明要更新
+        int major = node == null ? 0 : NodeMajor(node);
+        string oldVersion = null; // 安裝的版本太舊時記下來（詢問視窗要說明原因）
+        if (node != null && major > 0 && major < MinNode)
+        {
+            if (!File.Exists(Path.Combine(dir, @"runtime\node.exe")))
+            {
+                var r = MessageBox.Show("電腦上安裝的 Node.js 是 " + major + " 版，太舊了，AI 酒館需要 " + MinNode + " 以上的版本。\n\n"
+                    + "請到 Node.js 的網站下載並安裝 LTS 版（會直接更新原本的版本），裝好後再開一次。\n\n要現在開啟 Node.js 的下載頁面嗎？",
+                    Title, MessageBoxButtons.YesNo, MessageBoxIcon.Error);
+                if (r == DialogResult.Yes) Process.Start("https://nodejs.org/");
+                return 1;
+            }
+            oldVersion = FileVersionInfo.GetVersionInfo(node).ProductVersion ?? major.ToString();
+            node = null;
+        }
         bool bundled = false;
         if (node == null)
         {
@@ -48,7 +64,7 @@ static class Launcher
             string prefs = Path.Combine(dir, @"data\launcher.ini");
             if (!File.Exists(inside))
             {
-                var r = MessageBox.Show("找不到 Node.js，AI 酒館需要它才能執行。\n\n請安裝 Node.js 18 以上的版本（LTS 版即可），裝好後再開一次。\n\n"
+                var r = MessageBox.Show("找不到 Node.js，AI 酒館需要它才能執行。\n\n請安裝 Node.js " + MinNode + " 以上的版本（LTS 版即可），裝好後再開一次。\n\n"
                     + "不想安裝的話：從當初下載的 AI 酒館壓縮檔裡，把 runtime 資料夾中的 node.exe 複製回 AI 酒館資料夾的 runtime 資料夾，再開一次即可。\n\n"
                     + "要現在開啟 Node.js 的下載頁面嗎？",
                     Title, MessageBoxButtons.YesNo, MessageBoxIcon.Error);
@@ -58,11 +74,11 @@ static class Launcher
             if (!RememberedBundled(prefs))
             {
                 bool remember;
-                var choice = NodeChoice.Ask(FileVersionInfo.GetVersionInfo(inside).ProductVersion, out remember);
+                var choice = NodeChoice.Ask(FileVersionInfo.GetVersionInfo(inside).ProductVersion, oldVersion, MinNode, out remember);
                 if (choice == NodeChoice.Result.Install)
                 {
                     // 選擇自己安裝：開下載頁之前，順便提醒裝好以後可以刪掉內附的 Node.js
-                    MessageBox.Show("接下來會開啟 Node.js 的下載頁面，請安裝 LTS 版本，裝好後再開一次 AI 酒館。\n\n"
+                    MessageBox.Show("接下來會開啟 Node.js 的下載頁面，請安裝 LTS 版本" + (oldVersion != null ? "（會直接更新原本的 v" + oldVersion + "）" : "") + "，裝好後再開一次 AI 酒館。\n\n"
                         + "裝好以後，AI 酒館會自動改用安裝的版本，資料夾裡內附的 Node.js（約 95 MB）就用不到了：\n"
                         + "可以到酒館的「設定 → 資料 → 內附的 Node.js」按「刪除」省下空間。",
                         Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -75,6 +91,10 @@ static class Launcher
                     try { Directory.CreateDirectory(Path.GetDirectoryName(prefs)); File.WriteAllText(prefs, "bundled_node=always\r\n"); } catch { }
                 }
             }
+            // 內附的版本也太舊（很舊的分享版）：說明要更新
+            int innerMajor = NodeMajor(inside);
+            if (innerMajor > 0 && innerMajor < MinNode)
+                return Fail("內附的 Node.js 是 " + innerMajor + " 版，太舊了，AI 酒館需要 " + MinNode + " 以上的版本。\n\n請到 https://nodejs.org/ 安裝 LTS 版，或下載新版的 AI 酒館。");
             node = inside;
             bundled = true;
         }
@@ -118,6 +138,14 @@ static class Launcher
             Thread.Sleep(300);
         }
         return 0;
+    }
+
+    const int MinNode = 22; // 和 package.json 的 engines 一致
+
+    /** node.exe 的主版本號（讀檔案的版本資訊，不用執行它）；讀不到時回傳 0（不擋下） */
+    static int NodeMajor(string node)
+    {
+        try { return FileVersionInfo.GetVersionInfo(node).ProductMajorPart; } catch { return 0; }
     }
 
     static string FindNode()
@@ -186,7 +214,8 @@ static class NodeChoice
 {
     public enum Result { Bundled, Install, Cancel }
 
-    public static Result Ask(string version, out bool remember)
+    /** oldVersion：安裝的 Node.js 太舊時是那個版本（標題與說明改成「版本太舊」）；沒有安裝時是 null */
+    public static Result Ask(string version, string oldVersion, int minNode, out bool remember)
     {
         var form = new Form
         {
@@ -204,14 +233,17 @@ static class NodeChoice
         var width = new Size(S(500), 0);
         panel.Controls.Add(new Label
         {
-            Text = "這台電腦沒有安裝 Node.js", AutoSize = true,
+            Text = oldVersion != null ? "這台電腦的 Node.js 版本太舊" : "這台電腦沒有安裝 Node.js", AutoSize = true,
             Font = new Font(form.Font.FontFamily, form.Font.Size * 1.3f, FontStyle.Bold), Margin = new Padding(0, 0, 0, S(10)),
         });
         panel.Controls.Add(new Label
         {
             AutoSize = true, MaximumSize = width, Margin = new Padding(0, 0, 0, S(10)),
-            Text = "AI 酒館需要 Node.js 才能執行。你可以使用資料夾裡內附的 Node.js（v" + version + "）直接執行，"
-                + "不用安裝任何東西；也可以自己安裝 Node.js（建議，會自動取得安全性更新）。",
+            Text = oldVersion != null
+                ? "這台電腦安裝的 Node.js 是 v" + oldVersion + "，AI 酒館需要 " + minNode + " 以上的版本。你可以使用資料夾裡內附的 Node.js（v" + version + "）直接執行，"
+                    + "不用更新任何東西；也可以自己更新 Node.js（建議：到下載頁安裝 LTS 版，會直接取代舊版）。"
+                : "AI 酒館需要 Node.js 才能執行。你可以使用資料夾裡內附的 Node.js（v" + version + "）直接執行，"
+                    + "不用安裝任何東西；也可以自己安裝 Node.js（建議，會自動取得安全性更新）。",
         });
         panel.Controls.Add(new Label
         {

@@ -258,7 +258,7 @@ async function openWorlds() {
         onkeydown: ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); } } },
         h('div', { class: 'title' }, arrow, w.name), h('div', { class: 'sub' }, `${w.count} 個條目`)),
       h('button', { class: 'small', title: '編輯', onclick: () => openWorldEditor(w.id) }, ic('pencil', '編輯')),
-      h('button', { class: 'small', title: '匯出', onclick: () => download(`/api/worlds/${w.id}/export`) }, icon('export')),
+      h('button', { class: 'small', title: '匯出', onclick: () => exportFile({ kind: 'world', id: w.id }, `/api/worlds/${w.id}/export`) }, icon('export')),
       h('button', { class: 'small', title: '刪除', onclick: async () => { if (!await askConfirm(`刪除世界書「${w.name}」？\n會移到垃圾桶，${trashDaysText()}`)) return; await api('DELETE', `/api/worlds/${w.id}`); openWorlds(); } }, icon('trash-2')));
     return h('div', { class: 'wb-row' }, item, panel);
   };
@@ -278,12 +278,265 @@ async function openWorldEditor(id) {
   const baseline = snap();
   openModal('編輯世界書', body, [
     h('div', { class: 'left' }, h('button', { onclick: async () => { if (await confirmDiscard()) openWorlds(); } }, '← 返回')), // 返回放在左下角
-    h('button', { class: 'primary', onclick: async () => { w.name = name.value.trim() || '未命名'; await api('PUT', `/api/worlds/${id}`, w).then(() => { toast('世界書已儲存'); openWorlds(); }).catch(fail); } }, '儲存')], { wide: true, back: openWorlds, dirty: () => snap() !== baseline });
+    h('button', { class: 'primary', onclick: () => saveBook().catch(fail) }, '儲存')], { wide: true, back: openWorlds, dirty: () => snap() !== baseline });
+  // 儲存：打開之後在別處改過（card_stale）時，讓你選仍要覆蓋、重新讀取或取消
+  async function saveBook() {
+    w.name = name.value.trim() || '未命名';
+    const { ver, ...book } = w;
+    const put = force => api('PUT', `/api/worlds/${id}`, { ...book, base_ver: ver, ...(force ? { force: true } : {}) });
+    try { await put(false); } catch (e) {
+      if (e.code !== 'card_stale') throw e;
+      const pick = await askCardStale('世界書');
+      if (pick === 'force') await put(true);
+      else { if (pick === 'cancel') { closeModal(); openWorlds(); } else if (pick === 'reload') { closeModal(); openWorldEditor(id).catch(fail); } return; }
+    }
+    toast('世界書已儲存'); openWorlds();
+  }
 }
 
 // ===================== 角色卡編輯器 =====================
 
 /** back：按上一頁時回到哪個視窗（從角色介紹打開時回到介紹） */
+// ===================== 狀態欄的欄位編輯器（角色編輯頁「狀態欄」分頁） =====================
+// 欄位定義存在角色卡 extensions.ai_tavern_status（server 的 lib/status.js 會再整理一次）。設計稿：docs/狀態欄設計稿.md
+const STATUS_EXT = 'ai_tavern_status';
+const STATUS_LIMITS = { fields: 12, name: 20, hint: 200, initial: 200 }; // 和 lib/status.js 相同
+// 預設範本：套用後就是一般欄位，可以再改，不會再跟範本連動
+const STATUS_TEMPLATES = [
+  { id: 'daily', name: '戀愛／日常', char: [
+    { name: '心情', type: 'text', hint: '一兩個詞描述當下情緒', initial: '平靜' },
+    { name: '好感度', type: 'number', max: 100, hint: '對 {{user}} 的好感，0～100，依互動合理變化，每次變化不超過 5', initial: '30' },
+    { name: '服裝', type: 'text', hint: '目前的穿著，簡短描述', initial: '' },
+    { name: '位置', type: 'text', hint: '目前所在的地點', initial: '' },
+    { name: '內心想法', type: 'text', hint: '此刻沒說出口的想法，一句話', initial: '' }], user: [] },
+  { id: 'rpg', name: '冒險／RPG', char: [
+    { name: 'HP', type: 'number', max: 100, hint: '生命值，受傷減少、治療恢復', initial: '100' },
+    { name: 'MP', type: 'number', max: 100, hint: '魔力，使用法術時減少、休息恢復', initial: '100' },
+    { name: '狀態異常', type: 'text', hint: '中毒、疲勞等；沒有就寫「無」', initial: '無' },
+    { name: '裝備', type: 'text', hint: '目前的武器與防具', initial: '' }], user: [
+    { name: 'HP', type: 'number', max: 100, hint: '{{user}} 的生命值，受傷減少、治療恢復', initial: '100' },
+    { name: 'MP', type: 'number', max: 100, hint: '{{user}} 的魔力，使用法術時減少、休息恢復', initial: '100' },
+    { name: '持有金錢', type: 'number', hint: '金幣數量，買賣時增減', initial: '100' },
+    { name: '物品', type: 'text', hint: '身上的重要物品，用頓號分隔', initial: '' }] },
+  { id: 'simple', name: '簡易', char: [
+    { name: '心情', type: 'text', hint: '一兩個詞描述當下情緒', initial: '平靜' },
+    { name: '位置', type: 'text', hint: '目前所在的地點', initial: '' }], user: [] },
+  { id: 'blank', name: '空白', char: [], user: [] },
+];
+/**
+ * 狀態欄位編輯器。lists = { char_fields: [...], user_fields: [...] }（直接修改這個物件）。world：大世界用（角色欄位所有成員共用）。
+ * 回傳 { el, check }：check() 在存檔前檢查名稱，有問題回傳錯誤訊息
+ */
+function statusFieldsEditor(lists, { world = false } = {}) {
+  const charTitle = world ? '每位角色的狀態（所有角色共用這些欄位）' : '角色的狀態';
+  const wrap = h('div', { class: 'form' });
+  // 新欄位的 key：f1、f2…／u1、u2…（避開已經用過的）。key 不會跟著名稱變，改名後已存的數值照樣對得上
+  const newKey = (list, prefix) => { let n = 1; while (list.some(f => f.key === prefix + n)) n++; return prefix + n; };
+  const tplSel = h('select', { class: 'sf-tpl' }, h('option', { value: '' }, '套用範本…'), STATUS_TEMPLATES.map(t => h('option', { value: t.id }, t.name)));
+  tplSel.onchange = async () => {
+    const t = STATUS_TEMPLATES.find(x => x.id === tplSel.value);
+    tplSel.value = '';
+    if (!t) return;
+    if ((lists.char_fields.length || lists.user_fields.length) && !await askConfirm(`套用範本「${t.name}」？\n目前的狀態欄位會被取代。`, { okText: '取代' })) return;
+    for (const [k, src, prefix] of [['char_fields', t.char, 'f'], ['user_fields', t.user, 'u']]) {
+      lists[k] = [];
+      for (const f of src) lists[k].push({ ...structuredClone(f), key: newKey(lists[k], prefix) });
+    }
+    render();
+  };
+  const body = h('div', { class: 'form' });
+  function listEditor(k, title, prefix, emptyText) {
+    const list = lists[k];
+    const rows = list.map((f, i) => {
+      const num = f.type === 'number';
+      const inp = (prop, attrs) => {
+        const el = h('input', { value: f[prop] ?? '', ...attrs });
+        el.oninput = () => { f[prop] = prop === 'max' ? (el.value === '' ? '' : Number(el.value)) : el.value; updTok(); }; // 初始值一律存文字
+        return el;
+      };
+      const type = h('select', { title: '類型' }, h('option', { value: 'text' }, '文字'), h('option', { value: 'number' }, '數值'));
+      type.value = num ? 'number' : 'text';
+      type.onchange = () => { f.type = type.value; if (f.type !== 'number') delete f.max; else if (f.initial && !/^-?\d+(\.\d+)?$/.test(String(f.initial).trim())) f.initial = ''; render(); };
+      const move = dir => { const j = i + dir; [list[i], list[j]] = [list[j], list[i]]; render(); };
+      return h('div', { class: 'sf-row' },
+        h('div', { class: 'sf-main' },
+          inp('name', { type: 'text', class: 'sf-name', placeholder: '名稱', maxlength: STATUS_LIMITS.name, title: '欄位名稱（最多 20 字）' }),
+          type,
+          // 初始在前、最大在後；數值欄位的兩個輸入框是固定的小寬度
+          h('label', { class: 'sf-lab sf-init' + (num ? ' sf-num' : '') }, h('span', {}, '初始'), inp('initial', { type: num ? 'number' : 'text', placeholder: '選填', maxlength: STATUS_LIMITS.initial, title: '開新對話時的值（選填）' })),
+          num ? h('label', { class: 'sf-lab sf-max sf-num' }, h('span', {}, '最大'), inp('max', { type: 'number', min: 1, placeholder: '選填', title: '最大值（選填）：有填時面板會畫進度條' })) : null,
+          h('div', { class: 'sf-btns' },
+            h('button', { type: 'button', class: 'icon', title: '上移', disabled: i === 0, onclick: () => move(-1) }, icon('chevron-up')),
+            h('button', { type: 'button', class: 'icon', title: '下移', disabled: i === list.length - 1, onclick: () => move(1) }, icon('chevron-down')),
+            h('button', { type: 'button', class: 'icon', title: '刪除這個欄位', onclick: () => { list.splice(i, 1); render(); } }, icon('trash-2')))),
+        inp('hint', { type: 'text', class: 'sf-hint', maxlength: STATUS_LIMITS.hint, placeholder: '說明（給 AI 看的填寫規則，例如「0～100，每次變化不超過 5」）', title: '說明（最多 200 字）：沒寫時 AI 比較容易亂填' }));
+    });
+    const full = list.length >= STATUS_LIMITS.fields;
+    return h('fieldset', {}, h('legend', {}, title),
+      rows.length ? rows : h('p', { class: 'muted small-note' }, emptyText),
+      h('div', {}, h('button', { type: 'button', class: 'small', disabled: full, title: full ? `最多 ${STATUS_LIMITS.fields} 個欄位` : '',
+        onclick: () => { list.push({ key: newKey(list, prefix), name: '', type: 'text', hint: '', initial: '' }); render(); body.querySelectorAll(`.sf-list-${k} .sf-name`)[list.length - 1]?.focus(); } },
+      ic('plus', '新增欄位'))));
+  }
+  function render() {
+    const a = listEditor('char_fields', charTitle, 'f', '沒有角色狀態欄位。'), b = listEditor('user_fields', '玩家的狀態', 'u', '沒有玩家狀態欄位。');
+    a.classList.add('sf-list-char_fields'); b.classList.add('sf-list-user_fields');
+    body.replaceChildren(a, b);
+    updTok();
+  }
+  // 送給 AI 的狀態欄說明大約多少 token（說明文字由伺服器產生：lib/status.js 的 statusNote；打字時等一下再問）
+  const tok = h('div', { class: 'tok' });
+  let tokTimer = null, tokSeq = 0;
+  function updTok() {
+    clearTimeout(tokTimer);
+    tokTimer = setTimeout(async () => {
+      const seq = ++tokSeq;
+      try {
+        const r = await api('POST', '/api/status-note', { def: lists });
+        if (seq === tokSeq) tok.textContent = r.tokens ? (world ? `角色發言時，狀態欄說明與目前狀態約佔 ${r.tokens} tokens（旁白、導演會看到所有在場角色的狀態，會再多一些）` : `每次送出時，狀態欄說明與目前狀態約佔 ${r.tokens} tokens`) : '';
+      } catch { /* 算不出來就不顯示 */ }
+    }, 400);
+  }
+  render();
+  wrap.append(
+    h('p', { class: 'muted small-note' }, world
+      ? '對話頁右側的狀態欄會顯示這些欄位：每位角色各自一份「角色的狀態」，玩家的狀態只有一份。角色發言時只更新自己的狀態，旁白可以一次更新好幾位；你也可以在面板上手動修改。表情圖用各角色卡自己的。'
+      : '對話頁右側的狀態欄會顯示這些欄位。AI 每次回覆時會依照「說明」更新數值，你也可以在面板上手動修改。數值欄位填了最大值時會畫進度條。'),
+    h('div', { class: 'sf-top' }, tplSel, h('span', { class: 'muted small-note' }, '套用後可以再修改，不會再跟範本連動。')),
+    body, tok);
+  const check = () => {
+    for (const [k, label] of [['char_fields', '角色的狀態'], ['user_fields', '玩家的狀態']]) {
+      const names = lists[k].map(f => String(f.name || '').trim());
+      if (names.some(n => !n)) return `「${label}」有欄位沒有名稱`;
+      const bad = names.find(n => /[:：[\]]/.test(n));
+      if (bad) return `欄位名稱「${bad}」不能有冒號或方括號`;
+      const dup = names.find((n, i) => names.indexOf(n) !== i);
+      if (dup) return `「${label}」有兩個欄位都叫「${dup}」`;
+    }
+    return null;
+  };
+  return { el: wrap, check };
+}
+
+// ===================== 表情圖編輯（角色編輯頁「表情圖」分頁） =====================
+// 圖片放在角色資料夾的 expressions/，新增、改名、刪除、匯入當下就存（不用按「儲存」）；
+// 「預設表情」存在角色卡上（extensions.ai_tavern_expressions），跟著「儲存」一起存。設計稿 6.3 節
+/** 表情名稱（和 lib/expressions.js 的 cleanName 同樣規則的簡化版：只用來事先檢查同名） */
+const EXPR_ALIASES = { embarrassment: 'shy', nervousness: 'nervous' }; // 和 lib/expressions.js 的 ALIASES 相同
+const exprNameOf = file => {
+  const n = String(file).split(/[\\/]/).pop().replace(/\.[^.]*$/, '').replace(/[:*?"<>|]/g, '').trim().slice(0, 40);
+  return EXPR_ALIASES[n.toLowerCase()] || n;
+};
+const pickFiles = accept => new Promise(resolve => {
+  const input = h('input', { type: 'file', accept, multiple: true, hidden: true });
+  const done = v => { input.remove(); resolve(v); };
+  input.addEventListener('cancel', () => done([]));
+  input.addEventListener('change', () => done([...input.files]));
+  document.body.append(input); input.click();
+});
+/**
+ * getId：目前的角色 ID（新角色還沒儲存時是 null）；ex = { list: [{ name, ver }], default }（直接修改）；
+ * onChange：表情有變動時通知（對話頁的面板跟著換圖）
+ */
+function expressionEditor(getId, ex, onChange) {
+  const wrap = h('div', { class: 'form' });
+  const sync = (r, info) => { ex.list = r.expressions; ex.default = r.default; if (r.card_ver) ex.card_ver = r.card_ver; render(); onChange?.(info); };
+  const has = name => ex.list.some(e => e.name.toLowerCase() === name.toLowerCase());
+  async function addImages() {
+    const files = await pickFiles('image/png,image/webp,image/gif,image/jpeg');
+    if (!files.length) return;
+    const dup = files.map(f => exprNameOf(f.name)).filter(has);
+    let replace = false;
+    if (dup.length) replace = await askConfirm(`已經有同名的表情：${dup.join('、')}\n要用新的圖片取代嗎？選「略過」的話這幾張不會加入。`, { okText: '取代', cancelText: '略過' });
+    const errs = [];
+    let n = 0, last = null;
+    for (const fl of files) {
+      const name = exprNameOf(fl.name);
+      if (has(name) && !replace) continue;
+      try {
+        last = await api('POST', `/api/characters/${getId()}/expressions?name=${encodeURIComponent(name)}&replace=${replace ? 1 : 0}`, fl, true);
+        n++;
+      } catch (e) { errs.push(`${fl.name}：${e.message}`); }
+    }
+    if (last) sync(last);
+    if (n) toast(`已加入 ${n} 張表情圖`);
+    if (errs.length) toast(`有 ${errs.length} 張沒有加入：\n${errs.slice(0, 5).join('\n')}${errs.length > 5 ? '\n…' : ''}`, true, 9000);
+  }
+  async function importZip() {
+    const [fl] = await pickFiles('.zip,application/zip');
+    if (!fl) return;
+    const url = mode => `/api/characters/${getId()}/expressions/zip?on_conflict=${mode}`;
+    try {
+      let r = await api('POST', url('ask'), fl, true);
+      if (r.conflicts?.length) {
+        const rep = await askConfirm(`表情包裡有 ${r.conflicts.length} 個和現有表情同名：${r.conflicts.slice(0, 8).join('、')}${r.conflicts.length > 8 ? '…' : ''}\n要用表情包的圖片取代嗎？選「略過」的話只加入不同名的。`, { okText: '取代', cancelText: '略過' });
+        r = await api('POST', url(rep ? 'replace' : 'skip'), fl, true);
+      }
+      sync(r);
+      toast(`已從表情包加入 ${r.added.length} 張表情圖`);
+      if (r.skipped.length) toast(`略過了 ${r.skipped.length} 個檔案：\n${r.skipped.slice(0, 6).map(s => `${s.file}（${s.reason}）`).join('\n')}${r.skipped.length > 6 ? '\n…' : ''}`, false, 10000);
+    } catch (e) { fail(e); }
+  }
+  /** 預設表情的格子：選一張圖，存成格子的名稱（joy.png…，原本的檔名不管），已經有圖就換掉 */
+  async function uploadToSlot(p) {
+    const [fl] = await pickFiles('image/png,image/webp,image/gif,image/jpeg');
+    if (!fl) return;
+    try {
+      sync(await api('POST', `/api/characters/${getId()}/expressions?name=${encodeURIComponent(p.name)}&replace=1`, fl, true));
+      toast(`已上傳「${p.zh}（${p.name}）」`);
+    } catch (e) { fail(e); }
+  }
+  async function renameExpr(e) {
+    const to = await askText('表情改名', { value: e.name, note: '表情名稱就是檔名，模型會用這個名稱選表情。最多 40 字。', okText: '改名' });
+    if (to == null || !to.trim() || to.trim() === e.name) return;
+    try { sync(await api('PUT', `/api/characters/${getId()}/expressions/rename`, { from: e.name, to: to.trim() }), { renamed: true }); } catch (err) { fail(err); }
+  }
+  async function deleteExpr(e) {
+    if (!await askConfirm(`刪除表情「${exprLabel(e.name)}」？\n圖片會直接刪除，無法復原。`)) return;
+    try { sync(await api('DELETE', `/api/characters/${getId()}/expressions?name=${encodeURIComponent(e.name)}`)); } catch (err) { fail(err); }
+  }
+  function render() {
+    const id = getId();
+    if (!id) { wrap.replaceChildren(h('p', { class: 'muted small-note' }, '先按「儲存」建立角色，才能加入表情圖。')); return; }
+    const defSel = h('select', { class: 'ex-default' }, h('option', { value: '' }, '（不指定：顯示封面）'), ex.list.map(e => h('option', { value: e.name }, exprLabel(e.name))));
+    defSel.value = ex.list.some(e => e.name === ex.default) ? ex.default : '';
+    defSel.onchange = () => { ex.default = defSel.value || null; };
+    // 一張已經有的表情圖：預設表情可以「更換」（名稱固定），自訂的可以改名
+    const card = (e, preset) => h('div', { class: 'ex-item' + (e.name === ex.default ? ' is-default' : '') },
+      zoomable(h('img', { src: exprUrl(id, e), alt: e.name, loading: 'lazy' })),
+      h('div', { class: 'ex-name', title: e.name }, exprLabel(e.name)),
+      h('div', { class: 'ex-btns' },
+        preset ? h('button', { type: 'button', class: 'icon', title: '換一張圖', onclick: () => uploadToSlot(preset) }, icon('refresh-cw'))
+          : h('button', { type: 'button', class: 'icon', title: '改名', onclick: () => renameExpr(e) }, icon('pencil')),
+        h('button', { type: 'button', class: 'icon', title: '刪除', onclick: () => deleteExpr(e) }, icon('trash-2'))));
+    // 預設表情：固定 8 格，還沒上傳的是虛線的空格（不會送給 AI）
+    const presetCells = EXPR_PRESETS.map(p => {
+      const e = ex.list.find(x => x.name.toLowerCase() === p.name);
+      return e ? card(e, p) : h('button', { type: 'button', class: 'ex-item ex-empty', title: `上傳「${p.zh}（${p.name}）」的圖片`, onclick: () => uploadToSlot(p) },
+        h('div', { class: 'ex-ph' }, icon('plus')), h('div', { class: 'ex-name' }, `${p.zh}（${p.name}）`), h('div', { class: 'ex-up muted' }, '上傳'));
+    });
+    const customs = ex.list.filter(e => !exprPreset(e.name));
+    // replaceChildren 會把 null 變成「null」文字：沒有的項目先濾掉
+    wrap.replaceChildren(...[
+      h('p', { class: 'muted small-note' }, '對話頁的狀態欄會依照 AI 選的表情換圖。送給 AI 的是檔名（表情名稱），預設表情以英文為主。支援 PNG、WebP、GIF、JPEG，單張最多 5 MB。新增、更換、刪除當下就會存。'),
+      h('div', { class: 'ex-tools' },
+        h('button', { type: 'button', onclick: () => importZip() }, ic('import', '匯入表情包（ZIP）')),
+        h('label', { class: 'ex-def-lab' }, h('span', {}, '預設表情'), defSel)),
+      h('div', { class: 'field-title' }, '預設表情'),
+      h('p', { class: 'muted small-note' }, '點空格上傳，檔名會自動用格子的名稱（例如 joy.png）。SillyTavern 的表情包（ZIP，圖片放在第一層）匯入後，同名的圖會自動填進格子。'),
+      h('div', { class: 'ex-grid' }, presetCells),
+      h('div', { class: 'field-title' }, '其他表情'),
+      h('p', { class: 'muted small-note' }, '自己取名的表情：檔名就是表情名稱（例如 喝醉.png），AI 會用這個名稱選表情。'),
+      // 第一格固定是虛線的「新增表情」（和預設表情的空格同一種樣子），後面是已經有的自訂表情
+      h('div', { class: 'ex-grid' },
+        h('button', { type: 'button', class: 'ex-item ex-empty', title: '新增自己取名的表情（可以一次選多張，檔名就是表情名稱）', onclick: () => addImages().catch(fail) },
+          h('div', { class: 'ex-ph' }, icon('plus')), h('div', { class: 'ex-name' }, '新增表情'), h('div', { class: 'ex-up muted' }, '可以一次選多張')),
+        customs.map(e => card(e, null)))].filter(Boolean));
+  }
+  render();
+  return { el: wrap, render };
+}
+
 async function openCharEditor(ch, { back } = {}) {
   const isNew = !ch;
   const d = structuredClone(ch ? ch.data : { name: '', description: '', personality: '', scenario: '', first_mes: '', mes_example: '', creator_notes: '', system_prompt: '', post_history_instructions: '', alternate_greetings: [], tags: [], creator: '', character_version: '', extensions: {}, character_book: null });
@@ -408,6 +661,33 @@ async function openCharEditor(ch, { back } = {}) {
   const worldSel = h('select', {}, h('option', { value: '' }, '（不連結）'), worlds.map(w => h('option', { value: w.id }, w.name)));
   worldSel.value = ch?.world_id || '';
 
+  // 狀態欄的欄位
+  const rawStatus = d.extensions?.[STATUS_EXT];
+  const statusLists = {
+    char_fields: structuredClone(Array.isArray(rawStatus?.char_fields) ? rawStatus.char_fields : []),
+    user_fields: structuredClone(Array.isArray(rawStatus?.user_fields) ? rawStatus.user_fields : []),
+  };
+  const statusEd = statusFieldsEditor(statusLists);
+  let savedId = ch?.id || null; // 新角色第一次只儲存後，之後再存就是更新同一張卡
+  const ver = { base: ch?.ver ?? null }; // 打開編輯時卡片的版本：存檔時帶回去，被別處改過就提醒（見 askCardStale）
+  // 表情圖：當下就存；預設表情跟著「儲存」存進角色卡
+  const exprState = { list: ch?.expressions || [], default: defaultExpr(ch) };
+  const exprEd = expressionEditor(() => savedId, exprState, async info => {
+    // 改名、刪除表情時伺服器可能順便改了卡片上的預設表情：用新的版本，存檔時才不會誤判成被別處改過
+    if (exprState.card_ver) { ver.base = exprState.card_ver; delete exprState.card_ver; }
+    if ($('#chatView').hidden || state.char?.id !== savedId) return;
+    state.char.expressions = exprState.list;
+    // 改名時伺服器也改了對話裡記著的表情名稱：把狀態與訊息版本換成新的（不整份換掉 state.chat）
+    if (info?.renamed && state.chat) {
+      const chatId = state.chatId;
+      try {
+        const r = await api('GET', `/api/characters/${savedId}/chats/${chatId}`);
+        if (state.chatId === chatId) { r.messages.forEach((m, i) => { const cur = state.chat.messages[i]; if (cur && m.swipe_status) cur.swipe_status = m.swipe_status; }); state.chat.msg_ver = r.msg_ver; }
+      } catch { /* 讀不到就維持原樣 */ }
+    }
+    renderStatusPanel();
+  });
+
   const tabsDef = [
     ['基本', h('div', { class: 'form' },
       h('div', { class: 'editor-top' }, imgBox, h('div', { class: 'form' },
@@ -425,6 +705,8 @@ async function openCharEditor(ch, { back } = {}) {
     ['開場白', h('div', { class: 'form' },
       h('p', { class: 'muted small-note' }, '新對話開始時出現的訊息。每個開場白可以有好幾則：角色、旁白或你說的（點名字可以改成別人說）。有備用開場白時，開新對話會先讓你選一個；把備用開場白整個上移到第一個，就變成主要開場白。匯出給其他程式時，旁白與你的台詞會合併成一段文字。'),
       greetBox)],
+    ['狀態欄', statusEd.el],
+    ['表情圖', exprEd.el],
     ['世界書', h('div', { class: 'form' },
       h('label', {}, h('span', {}, '連結全域世界書（只對此角色生效）'), worldSel),
       h('fieldset', {}, h('legend', {}, '角色內嵌世界書'), entriesEditor(book)))],
@@ -437,7 +719,6 @@ async function openCharEditor(ch, { back } = {}) {
   const { bar: tabBar, panes } = tabsUI(tabsDef);
 
   // 儲存：close＝true 時存完關閉視窗（「儲存並關閉」）；false 時只儲存，繼續編輯（綠色的「儲存」）
-  let savedId = ch?.id || null; // 新角色第一次只儲存後，之後再存就是更新同一張卡
   let saving = false;
   let markSaved = () => {}; // 存好後把目前內容當成「已儲存」（下面設定）
   const save = async (close = true) => {
@@ -445,21 +726,45 @@ async function openCharEditor(ch, { back } = {}) {
     for (const k of ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions', 'creator', 'character_version']) d[k] = f[k].value;
     d.name = d.name.trim();
     if (!d.name) return toast('請輸入角色名稱', true);
+    const statusErr = statusEd.check();
+    if (statusErr) return toast(statusErr + '（在「狀態欄」分頁）', true);
     d.tags = f.tags.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
     const bs = cleanBlocks();
     d.alternate_greetings = bs.slice(1).map(flatten);
     // 只有一般的開場白（每個都是一則角色說的話）時不用存結構
     const ext = { ...(d.extensions || {}) };
     if (bs.every(b => b.length === 1 && b[0].speaker === 'char')) delete ext[OPEN_KEY]; else ext[OPEN_KEY] = bs;
+    // 狀態欄：沒有欄位就不存（伺服器也會拿掉）
+    if (statusLists.char_fields.length || statusLists.user_fields.length) ext[STATUS_EXT] = structuredClone(statusLists); else delete ext[STATUS_EXT];
+    if (exprState.default) ext.ai_tavern_expressions = { default: exprState.default }; else delete ext.ai_tavern_expressions; // 預設表情
     d.extensions = ext;
     d.character_book = book.entries.length ? { ...book, name: book.name || d.name } : null;
     const payload = { data: d, cover: img.cover || undefined, avatar: img.avatar || undefined, remove_avatar: img.removeAvatar || undefined, world_id: worldSel.value || null };
     saving = true;
     try {
       let id;
-      if (!savedId) { id = (await api('POST', '/api/characters', payload)).id; if (worldSel.value) await api('PUT', `/api/characters/${id}`, { world_id: worldSel.value }); }
-      else { id = savedId; await api('PUT', `/api/characters/${id}`, payload); }
+      if (!savedId) {
+        id = (await api('POST', '/api/characters', payload)).id;
+        ver.base = (await api('PUT', `/api/characters/${id}`, worldSel.value ? { world_id: worldSel.value } : {})).ver;
+      } else {
+        id = savedId;
+        const put = force => api('PUT', `/api/characters/${id}`, { ...payload, base_ver: ver.base ?? undefined, ...(force ? { force: true } : {}) });
+        let r;
+        try { r = await put(false); } catch (e) {
+          if (e.code !== 'card_stale') throw e;
+          const pick = await askCardStale('角色卡');
+          if (pick === 'force') r = await put(true);
+          else {
+            if (pick === 'cancel') closeModal();
+            else if (pick === 'reload') { const fresh = await api('GET', `/api/characters/${id}`); closeModal(); openCharEditor(fresh, { back }).catch(fail); }
+            return;
+          }
+        }
+        ver.base = r.ver;
+      }
+      const isFirst = !savedId;
       savedId = id;
+      if (isFirst) exprEd.render(); // 新角色第一次儲存後才能加表情圖
       // 圖片已經存好：之後只儲存時不用再送一次
       img.cover = null; img.avatar = null; img.removeAvatar = false;
       markSaved();
@@ -467,7 +772,7 @@ async function openCharEditor(ch, { back } = {}) {
       toast('角色已儲存');
       if (!$('#chatView').hidden && state.char?.id === id) {
         state.char = await api('GET', `/api/characters/${id}`);
-        renderSide(); renderMessages();
+        renderSide(); renderMessages(); renderStatusPanel(); // 封面可能換了
       } else await loadChars();
     } catch (e) { fail(e); }
     finally { saving = false; }
@@ -475,9 +780,10 @@ async function openCharEditor(ch, { back } = {}) {
 
   const foot = [];
   if (!isNew) foot.push(h('div', { class: 'left' },
-    h('button', { onclick: () => download(`/api/characters/${ch.id}/export?format=png`) }, ic('export', '匯出 PNG')),
-    h('button', { onclick: () => download(`/api/characters/${ch.id}/export?format=json`) }, ic('export', '匯出 JSON')),
-    h('button', { class: 'danger', onclick: async () => {
+    h('button', { onclick: () => exportCharFile(ch.id, 'png') }, ic('export', '匯出 PNG')),
+    h('button', { onclick: () => exportCharFile(ch.id, 'json') }, ic('export', '匯出 JSON')),
+    // .charx：連同封面與表情圖一起帶走（PNG、JSON 只有角色資料）
+    h('button', { title: '角色卡 V3 的 ZIP 格式：連同封面與所有表情圖一起匯出', onclick: () => exportCharFile(ch.id, 'charx') }, ic('export', '匯出 .charx')),    h('button', { class: 'danger', onclick: async () => {
       if (!await askConfirm(`確定刪除角色「${ch.data.name}」以及所有聊天紀錄？\n角色連同所有對話會移到垃圾桶，${trashDaysText()}`)) return;
       try { await api('DELETE', `/api/characters/${ch.id}`); } catch (e) { return fail(e); } // 刪除失敗：視窗留著，不顯示成功
       closeModal(); toast('已刪除角色');
@@ -490,7 +796,7 @@ async function openCharEditor(ch, { back } = {}) {
     h('button', { class: 'primary', onclick: () => save(true) }, '儲存並關閉')));
   // 還沒儲存的修改：和打開時（或上次儲存時）的內容比較
   const TEXT_KEYS = ['name', 'tags', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator_notes', 'system_prompt', 'post_history_instructions', 'creator', 'character_version'];
-  const snap = () => JSON.stringify([TEXT_KEYS.map(k => f[k].value), blocks, book, worldSel.value, img.cover, img.avatar, img.removeAvatar]);
+  const snap = () => JSON.stringify([TEXT_KEYS.map(k => f[k].value), blocks, book, worldSel.value, img.cover, img.avatar, img.removeAvatar, statusLists, exprState.default]);
   let baseline = snap();
   markSaved = () => { baseline = snap(); };
   openModal(isNew ? '建立新角色' : `角色設定：${ch.data.name}`, h('div', {}, tabBar, ...panes), foot, { wide: true, fixed: true, back, dirty: () => snap() !== baseline });

@@ -54,7 +54,7 @@ const HOME_SORTS = [
   ['name', '名稱（A→Z）', (a, b) => byName.compare(a.name, b.name)],
   ['name-desc', '名稱（Z→A）', (a, b) => byName.compare(b.name, a.name)],
   ['new', '最新加入', (a, b) => createdAt(b) - createdAt(a)],
-  ['old', '最早加入', (a, b) => createdAt(a) - createdAt(b)],
+  ['old', '最舊加入', (a, b) => createdAt(a) - createdAt(b)],
   ['chats', '對話最多', (a, b) => (b.chat_count || 0) - (a.chat_count || 0) || lastUsed(b) - lastUsed(a)],
   // 自訂ID排序：照角色／世界詳情裡設定的順序 ID 由小到大；沒設定的排在後面；一樣大（或都沒設定）時照加入的時間
   ['order', '自訂ID排序', (a, b) => {

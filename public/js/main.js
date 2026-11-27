@@ -14,6 +14,10 @@
     if (r.corrupt?.length) { /* 上方已有損毀提示 */ }
     else if (!r.settings.first_run_done && !$('#homeView').hidden) openFirstRunGuide();
     else if (r.settings.provider !== 'openai' && !r.keys[r.settings.provider]?.set) toast('尚未設定 API 金鑰，請到「設定」填寫', true);
+    // 讀不懂的對話檔：清單裡看不到它，只在伺服器記錄裡有一行警告；這裡提示一次，免得以為對話不見了
+    api('GET', '/api/broken-chats').then(b => {
+      if (b.files?.length) toast(`有 ${b.files.length} 段對話的檔案損毀、讀不懂，對話清單裡看不到：${b.files.slice(0, 3).join('、')}${b.files.length > 3 ? '…' : ''}。可以到「設定 → 資料」從備份還原`, true, 15000);
+    }).catch(() => {});
     // 檢查更新（「設定 → 關於」可以關閉）：有新版本時只顯示小紅點與一則提示，不跳出視窗
     if (r.settings.update_check !== false) {
       api('GET', '/api/update-check').then(u => {

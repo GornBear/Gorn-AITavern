@@ -9,7 +9,8 @@ http.createServer((req, res) => {
   let b = '';
   req.on('data', c => (b += c));
   req.on('end', () => {
-    fs.writeFileSync(path.join(DIR, 'last-auth.txt'), req.url + ' ' + (req.headers.authorization || ''));
+    // LM Studio 的 /api/v0/models 不帶金鑰：不記，免得蓋掉前一個 /models 請求帶的金鑰
+    if (!['/api/v0/models', '/api/version', '/api/show'].includes(req.url)) fs.writeFileSync(path.join(DIR, 'last-auth.txt'), req.url + ' ' + (req.headers.authorization || ''));
     if (req.headers.authorization === 'Bearer bad') { res.writeHead(401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify([{ error: { code: 401, message: 'API key not valid. Please pass a valid API key.' } }])); }
     // Gemini 原生 API（TAVERN_GEMINI_URL 指到 /gemini）
     if (req.url.startsWith('/gemini/')) {
@@ -24,8 +25,6 @@ http.createServer((req, res) => {
       fs.writeFileSync(path.join(DIR, 'gemini-request.json'), JSON.stringify({ url: req.url, key: req.headers['x-goog-api-key'], body: gb }, null, 2));
       // 不會思考的模型：送了思考設定就拒絕
       if (model === 'gemini-nothink' && gb.generationConfig?.thinkingConfig) return json(400, { error: { code: 400, message: 'Thinking is not supported for this model.', status: 'INVALID_ARGUMENT' } });
-      // 不接受「公民誠信」類別的模型
-      if (model === 'gemini-nocivic' && (gb.safetySettings || []).some(s => s.category === 'HARM_CATEGORY_CIVIC_INTEGRITY')) return json(400, { error: { code: 400, message: 'Invalid value at safety_settings[4].category: HARM_CATEGORY_CIVIC_INTEGRITY is not supported.', status: 'INVALID_ARGUMENT' } });
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       const ev = o => res.write(`data: ${JSON.stringify(o)}\r\n\r\n`);
       if (model === 'gemini-prohibited') { // Google 不開放調整的政策過濾
@@ -49,6 +48,19 @@ http.createServer((req, res) => {
     // 檢查更新：假的 GitHub Releases（最新版本 99.0.0；連結故意指到別的網站，伺服器要換回儲存庫的頁面）
     if (req.url === '/github/releases/latest') return res.writeHead(200, { 'Content-Type': 'application/json' }), res.end(JSON.stringify({ tag_name: 'v99.0.0', name: 'AI 酒館 v99.0.0', html_url: 'https://evil.example.com/x', body: '## 更新內容\n- 測試', published_at: '2026-11-25T00:00:00Z' }));
     if (req.url.startsWith('/gem/') && req.url.endsWith('/models')) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ id: 'models/gemini-z' }, { id: 'models/gemini-a' }] })); }
+    // 上下文長度：LM Studio 自己的 API（目前載入的長度）、OpenRouter 風格的清單（context_length）
+    if (req.url === '/api/v0/models') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ id: 'mock-a', max_context_length: 131072, loaded_context_length: 32768 }, { id: 'not-in-list', max_context_length: 4096 }] })); }
+    // 假的 Ollama：/ollama/v1/models 的模型，上下文長度要問 /api/version、/api/show
+    if (req.url === '/ollama/v1/models') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ id: 'llama3:8b' }, { id: 'qwen:7b' }] })); }
+    if (req.url === '/api/version') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ version: '0.9.0' })); }
+    if (req.url === '/api/show') {
+      const want = JSON.parse(b || '{}').model;
+      const info = { 'llama3:8b': { model_info: { 'general.architecture': 'llama', 'llama.context_length': 131072 }, parameters: 'num_ctx 8192\nstop "<|eot_id|>"' },
+        'qwen:7b': { model_info: { 'general.architecture': 'qwen2', 'qwen2.context_length': 32768 } } }[want];
+      res.writeHead(info ? 200 : 404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(info || { error: 'not found' }));
+    }
+    if (req.url === '/ctx/v1/models') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ id: 'or-model', context_length: 200000 }, { id: 'or-small', top_provider: { context_length: 8192 } }, { id: 'or-none' }] })); }
     if (req.url.endsWith('/models')) { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ id: 'mock-b' }, { id: 'mock-a' }] })); }
     const body = JSON.parse(b || '{}');
     fs.writeFileSync(LOG, JSON.stringify(body, null, 2));
@@ -136,7 +148,20 @@ http.createServer((req, res) => {
       else sse({ choices: [{ delta: { content: out } }] });
       sse({ choices: [{ delta: {}, finish_reason: body.model === 'thinkorg' ? 'length' : 'stop' }] }); usageChunk(); res.write('data: [DONE]\n\n'); return res.end();
     }
-    const parts = body.model === 'leaky' ? ['蘿亞：我先說', '\n艾迪娜：我也要說', '\n旅人：好'] // 會替別人寫台詞
+    // 狀態欄：思考裡的假標籤＋正文最後的狀態（標籤拆在兩段送出）；只寫部分欄位；寫到一半被截斷
+    const STATUS_PARTS = {
+      status: ['<thinking>想一下 <status>[角色]\n心情：假的</status></thinking>', '好的，我們出發吧。', '\n<sta', 'tus>\n[角色]\n心情： 緊張但期待\n好感度：35\n[玩家]\n- HP:92\n不存在的欄位：x\n</status>'],
+      'status-partial': ['嗯。', '\n<status>\n好感度：140\n</status>'],
+      'status-trunc': ['寫到一半', '\n<status>\n心情：'],
+      expr: ['嗯……', '\n<expression>「SAD」</expression>\n<status>\n心情：低落\n</status>'], // 表情：大小寫、括號不同也認得
+      'expr-bad': ['好。', '\n<expression>不存在的表情</expression>'], // 不在清單裡的表情：忽略
+      // 大世界：角色發言（只收自己的分區＋玩家；寫到別人的略過）
+      'wstatus-char': ['我有點不好意思。', '\n<expression>shy</expression>\n<status>\n[角色]\n心情：害羞\n[狀乙]\n心情：替別人亂寫\n[玩家]\nHP：70\n</status>'],
+      // 大世界：旁白一次寫好幾個角色（表情一行一個「角色名：表情」，不能被當成替別人寫的台詞截掉）
+      'wstatus-narr': ['兩人相視一笑。', '\n<expression>\n狀甲：joy\n狀乙：sad\n</expression>\n<status>\n[狀甲]\n心情：開心\n[狀乙]\n心情：難過\n[玩家]\nHP：50\n</status>'],
+    };
+    const parts = STATUS_PARTS[body.model] ? STATUS_PARTS[body.model]
+      : body.model === 'leaky' ? ['蘿亞：我先說', '\n艾迪娜：我也要說', '\n旅人：好'] // 會替別人寫台詞
       : body.model === 'mention' ? ['艾迪娜你覺得呢。', '蘿亞也想聽聽看。', '今天的天氣很好。', '我們去散步吧。', '順便買點東西。', '最後回家休息。'] // 點名其他角色
       : ['啊啦……', '晚上好呀～', '「要喝點', '石榴汽水嗎？」', ' 呵呵～'];
     let i = 0;

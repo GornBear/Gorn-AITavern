@@ -33,6 +33,7 @@ async function enterChat(charId, chatId) {
   lsSet(LAST_CHAT_KEY, `${charId}/${chatId}`);
   showView('chat');
   $('#sidebar').classList.remove('open');
+  setStatusPanel(statusPanelPref(), { remember: false }); // 狀態欄：電腦版照記住的開關，手機版先關著
   $('#status').textContent = ''; $('#status').title = '';
   showUsage();
   state.renderChat = null; // 每次打開對話都依設定重新決定先畫幾則
@@ -232,6 +233,7 @@ function renderHead() {
     : `與 ${state.char.data.name} 的對話`;
   $('#chatSub').textContent = `${who}｜${state.chat.messages.length} 則｜${memInfo(state.chat)}`;
   document.title = `AI酒館－${state.char.data.name}`; // 對話中：AI酒館 後面接角色（或世界）名稱
+  renderStatusPanel();
 }
 /** 把文字元素換成輸入框就地改名：Enter 儲存、Esc 取消 */
 function inlineRename(el, current, save) {
@@ -568,6 +570,18 @@ async function openChatSettings() {
         h('button', { type: 'button', onclick: after(openMemory) }, ic('brain', '檢視／編輯記憶')),
         h('button', { type: 'button', onclick: after(openPreview) }, ic('file-text', '檢視送出的提示詞')),
         h('button', { type: 'button', class: 'danger', onclick: after(clearChat) }, ic('eraser', '清空聊天')))),
+    // 匯出這段對話：Markdown／純文字方便閱讀，jsonl 是 SillyTavern 的對話格式（可以帶到 SillyTavern 匯入）
+    // 匯入 SillyTavern 的對話：這段還停在開場白就直接帶入，已經有內容就開一段新的
+    h('fieldset', {}, h('legend', {}, '匯出／匯入對話'),
+      h('div', { class: 'btns' },
+        [['md', 'Markdown'], ['txt', '純文字'], ['jsonl', 'SillyTavern（.jsonl）']].map(([fmt, label]) =>
+          h('button', { type: 'button', onclick: () => exportFile({ kind: 'chat', id: `${charId}/${chatId}`, format: fmt }, `${url}/export?format=${fmt}`) }, ic('export', label)))),
+      h('p', { class: 'muted small-note' }, '匯出：每則訊息用目前顯示的版本，思考過程不包含在內。'),
+      h('div', { class: 'btns' },
+        h('button', { type: 'button', onclick: () => importChatFile(charId, { into: chatId }) }, ic('import', '匯入 SillyTavern 對話（.jsonl）'))),
+      h('p', { class: 'muted small-note' }, c.messages.every(m => m.greeting)
+        ? '匯入：這段對話還停在開場白，匯入的內容會直接取代開場白。'
+        : '匯入：這段對話已經有內容，會另外開一段新的對話，這段不受影響。')),
     h('fieldset', {}, h('legend', {}, '世界書'), bookList,
       h('p', { class: 'muted small-note' }, '取消勾選＝這段對話不使用那本世界書（其他對話不受影響）。')),
     npcBox,
@@ -596,9 +610,9 @@ const memInfo = c => {
   return `記憶已整理 ${upto}/${c.messages.length} 則`;
 };
 /** 背景自動更新記憶時，在標題列顯示進度，完成後更新 */
-async function watchMemory(charId, chatId) {
+async function watchMemory(charId, chatId, label = '正在背景壓縮舊對話（整理進記憶）…') {
   const here = () => state.char?.id === charId && state.chatId === chatId;
-  if (here()) $('#chatSub').textContent += '｜正在背景壓縮舊對話（整理進記憶）…';
+  if (here()) $('#chatSub').textContent += '｜' + label;
   for (let i = 0; i < 100; i++) {
     await new Promise(r => setTimeout(r, 3000));
     const all = await api('GET', '/api/chats').catch(() => null);
@@ -606,7 +620,11 @@ async function watchMemory(charId, chatId) {
     if (c && c.memory_updating) continue;
     if (here() && !state.generating) {
       const fresh = await api('GET', `/api/characters/${charId}/chats/${chatId}`).catch(() => null);
-      if (fresh && here()) { Object.assign(state.chat, { memory: fresh.memory, memory_upto: fresh.memory_upto, memory_updated: fresh.memory_updated, memory_cut: fresh.memory_cut }); renderHead(); }
+      if (fresh && here()) {
+        Object.assign(state.chat, { memory: fresh.memory, memory_upto: fresh.memory_upto, memory_updated: fresh.memory_updated, memory_cut: fresh.memory_cut, memory_prev: fresh.memory_prev });
+        if (fresh.deleted) state.chat.deleted = fresh.deleted; else delete state.chat.deleted; // 重新整理後「已整理進記憶」的標記會變
+        renderHead();
+      }
     }
     return;
   }
@@ -703,11 +721,343 @@ async function refreshChatList() {
 $('#btnOpenSide').onclick = () => $('#sidebar').classList.add('open');
 $('#btnCloseSide').onclick = () => $('#sidebar').classList.remove('open');
 
+// ===================== 狀態欄面板 =====================
+// 對話頁右側：圖片 → 角色狀態 → 使用者狀態（使用者狀態一律貼齊底部）。設計稿：docs/狀態欄設計稿.md
+// 電腦版佔一欄，開關記在這台裝置（localStorage）；手機版（≤760px）從右邊滑出蓋在畫面上，每次進對話預設關閉
+const STATUS_PANEL_KEY = 'tavern.statusPanel';
+const narrowMq = matchMedia('(max-width: 760px)');
+/** 這台裝置記住的開關（只有電腦版算數；手機版一律先關著） */
+const statusPanelPref = () => !narrowMq.matches && lsGet(STATUS_PANEL_KEY) === '1';
+function setStatusPanel(open, { remember = true } = {}) {
+  const view = $('#chatView');
+  // 使用者按的才滑動；進對話、視窗寬度跨過界線時直接切換（不然每次進對話面板都滑一次）
+  // （先關掉過場、換好狀態、讀一次版面讓瀏覽器套用，再把過場打開；不靠畫格，視窗在背景時也不會卡住）
+  if (!remember) view.classList.add('sp-no-anim');
+  view.classList.toggle('sp-open', open);
+  if (!remember) { void $('#statusPanel').offsetWidth; view.classList.remove('sp-no-anim'); }
+  const btn = $('#btnStatusPanel');
+  btn.classList.toggle('on', open);
+  btn.setAttribute('aria-pressed', String(open));
+  btn.title = open ? '收起狀態欄' : '狀態欄（顯示角色圖片與狀態）';
+  if (remember && !narrowMq.matches) lsSet(STATUS_PANEL_KEY, open ? '1' : '0'); // 手機版的開關不影響電腦版記住的設定
+}
+$('#btnStatusPanel').onclick = () => setStatusPanel(!$('#chatView').classList.contains('sp-open'));
+$('#btnSpExpand').onclick = () => setStatusPanel(true); // 訊息區右緣的「<<」
+$('#btnSpCollapse').onclick = () => setStatusPanel(false); // 訊息區右緣的「>>」
+$('#btnCloseStatus').onclick = () => setStatusPanel(false);
+$('#spMask').onclick = () => setStatusPanel(false);
+// 視窗寬度跨過手機版的界線：變窄時先關掉（不要突然蓋住畫面），變寬時回到記住的開關
+narrowMq.addEventListener('change', () => setStatusPanel(statusPanelPref(), { remember: false }));
+
+/** 面板裡的一行：「名稱：內容」（內容可換行） */
+/** 欄位名稱：不到 4 個字時平均分散在 4 個字的寬度裡（心　　情：），冒號對齊；更長的照原本寬度往右推 */
+const statusKey = name => h('span', { class: 'sp-key' }, h('span', { class: 'sp-kn' }, name));
+const statusRow = (name, value) => h('div', { class: 'sp-row' }, statusKey(name), h('span', { class: 'sp-val' }, value ?? ''));
+/** 狀態欄位定義：角色卡的 extensions.ai_tavern_status；大世界是世界卡的 status（所有成員共用角色欄位） */
+function statusDefOf(ch) {
+  const s = ch?.is_world ? ch.world?.status : ch?.data?.extensions?.ai_tavern_status;
+  const ok = l => (Array.isArray(l) ? l.filter(f => f && f.key && f.name) : []);
+  return { char: ok(s?.char_fields), user: ok(s?.user_fields) };
+}
+/** 這張卡（這個世界）有沒有用到狀態欄：有欄位或有表情圖（和伺服器的 ownerUsesStatus 相同） */
+function usesStatus(ch) {
+  const d = statusDefOf(ch);
+  if (d.char.length || d.user.length) return true;
+  return ch?.is_world ? worldMembers(ch).some(m => m.expressions.length) : (ch?.expressions || []).length > 0;
+}
+// ---------- 大世界 ----------
+// 每則訊息的 swipe_status：{ chars: { 成員 id: {...} }, exprs: { 成員 id: 表情 }, user?, focus? }，只記那則寫到的角色
+/** 世界的成員，整理成和角色卡一樣的樣子（頭像、表情圖、預設表情都用同一套函式） */
+const worldMembers = ch => (ch?.world?.members || []).filter(m => !m.missing).map(m => ({
+  id: m.id, name: m.name, has_cover: m.has_cover, has_avatar: m.has_avatar, img_ver: m.img_ver, expressions: m.expressions || [],
+  data: { name: m.name, extensions: { ai_tavern_expressions: { default: m.expr_default || null } } } }));
+/** 大世界的目前狀態：每個角色、表情、玩家狀態各自往回找最近的一份（upto：只看前 upto 則） */
+function worldStatus(msgs, upto = msgs?.length || 0) {
+  const out = { chars: {}, exprs: {}, user: null };
+  for (let i = Math.min(upto, msgs?.length || 0) - 1; i >= 0; i--) {
+    const m = msgs[i];
+    const s = m?.role === 'assistant' && Array.isArray(m.swipe_status) ? m.swipe_status[m.swipe_id || 0] : null;
+    if (!s || typeof s !== 'object') continue;
+    for (const [id, v] of Object.entries(s.chars || {})) if (!(id in out.chars)) out.chars[id] = v;
+    for (const [id, v] of Object.entries(s.exprs || {})) if (!(id in out.exprs)) out.exprs[id] = v;
+    if (!out.user && s.user) out.user = s.user;
+  }
+  return out;
+}
+/** 最後發言的角色：輪流發言看訊息的發言者（旁白發言時沿用上一位），旁白統一模式看狀態記下的 focus（表情區塊最後一個角色） */
+function lastSpeaker(msgs, ids) {
+  for (let i = (msgs?.length || 0) - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m?.role !== 'assistant') continue;
+    if (ids.has(m.speaker)) return m.speaker;
+    if (m.speaker) continue; // 旁白
+    const s = Array.isArray(m.swipe_status) ? m.swipe_status[m.swipe_id || 0] : null;
+    if (s?.focus && ids.has(s.focus)) return s.focus;
+  }
+  return null;
+}
+/** 這一輪（你最後一則訊息之後）狀態或表情有變動的角色 */
+function changedThisRound(msgs) {
+  const u = msgs.findLastIndex(m => m.role === 'user');
+  if (u < 0) return new Set();
+  const a = worldStatus(msgs, u), b = worldStatus(msgs);
+  const ids = new Set([...Object.keys(b.chars), ...Object.keys(b.exprs)]);
+  return new Set([...ids].filter(id => JSON.stringify(a.chars[id] ?? null) !== JSON.stringify(b.chars[id] ?? null) || (a.exprs[id] ?? null) !== (b.exprs[id] ?? null)));
+}
+/**
+ * 面板上的大世界角色：在場的（輪流發言記錄了誰在場時），沒有紀錄就是全部成員。
+ * 選到的角色：state.spMember；最後發言的角色換人時自動切過去（角色發言時面板跟著換）
+ */
+function worldPanelPick(ch) {
+  const all = worldMembers(ch);
+  if (!all.length) return null;
+  const msgs = state.chat.messages;
+  const present = Array.isArray(state.chat.present) ? all.filter(m => state.chat.present.includes(m.id)) : [];
+  const list = present.length ? present : all;
+  const ids = new Set(all.map(m => m.id));
+  const focus = lastSpeaker(msgs, ids);
+  const sp = state.spWorld?.chat === state.chatId ? state.spWorld : (state.spWorld = { chat: state.chatId, focus, member: null, seen: new Map() });
+  if (sp.focus !== focus) { sp.focus = focus; if (focus) sp.member = focus; }
+  if (!list.some(m => m.id === sp.member)) sp.member = list.some(m => m.id === focus) ? focus : list[0].id;
+  // 看過了：記下看的時候那個角色的狀態；之後又變了就再亮起來
+  const cur = worldStatus(msgs);
+  const sigOf = id => JSON.stringify([cur.chars[id] ?? null, cur.exprs[id] ?? null]);
+  sp.seen.set(sp.member, sigOf(sp.member)); // 正在看的角色不用再提醒
+  const changed = changedThisRound(msgs);
+  return { list, member: all.find(m => m.id === sp.member), lit: new Set([...changed].filter(id => sp.seen.get(id) !== sigOf(id))) };
+}
+function selectPanelMember(id) {
+  if (!state.spWorld || state.spWorld.member === id) return;
+  state.spWorld.member = id;
+  if (state.spEdit) state.spEdit = null; // 換角色：放棄編輯到一半的內容
+  renderStatusPanel();
+}
+/** 頭像切換列：選到的外框亮起，這一輪有變動、還沒看過的右上角亮一個點 */
+function renderMemberStrip(pick) {
+  const box = $('#spMembers');
+  box.hidden = !pick;
+  if (!pick) { box.replaceChildren(); box.dataset.sig = ''; return; }
+  const sig = JSON.stringify([pick.list.map(m => [m.id, m.name, m.img_ver]), pick.member.id, [...pick.lit]]);
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.replaceChildren(...pick.list.map(m => {
+    const on = m.id === pick.member.id, lit = pick.lit.has(m.id);
+    const b = h('button', { type: 'button', class: 'sp-mem' + (on ? ' on' : '') + (lit ? ' lit' : ''), role: 'tab', 'aria-selected': String(on),
+      title: m.name + (lit ? '（這一輪狀態有變動）' : ''), onclick: () => selectPanelMember(m.id) }, avatarEl(m, 'm-av'));
+    return b;
+  }));
+  // 選到的頭像捲進看得到的範圍（只捲這一列，不動整個頁面）
+  const on = $('.sp-mem.on', box);
+  if (on) {
+    const r = on.getBoundingClientRect(), br = box.getBoundingClientRect();
+    if (r.left < br.left) box.scrollLeft -= br.left - r.left + 8;
+    else if (r.right > br.right) box.scrollLeft += r.right - br.right + 8;
+  }
+}
+/**
+ * 目前狀態：從最新的訊息往回找，第一則「目前顯示的版本有狀態」的 assistant 訊息。
+ * 切換版本、刪除訊息、回溯時自動回到當時的狀態。都沒有（舊對話）時回傳 null
+ */
+function currentStatus(msgs) {
+  for (let i = (msgs?.length || 0) - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m?.role !== 'assistant' || !Array.isArray(m.swipe_status)) continue;
+    const s = m.swipe_status[m.swipe_id || 0];
+    if (s && typeof s === 'object') return s;
+  }
+  return null;
+}
+/** 一個欄位的顯示：數值有最大值時畫進度條＋「80/100」；沒有值顯示「—」 */
+function statusFieldRow(f, raw) {
+  const v = raw == null ? '' : String(raw).trim();
+  if (!v) return h('div', { class: 'sp-row' }, statusKey(f.name), h('span', { class: 'sp-val sp-none' }, '—'));
+  const n = Number(v), max = Number(f.max);
+  if (f.type === 'number' && max > 0 && Number.isFinite(n)) {
+    const pct = Math.max(0, Math.min(100, (n / max) * 100));
+    return h('div', { class: 'sp-row sp-num', title: `${f.name}：${v}/${max}` },
+      statusKey(f.name), h('span', { class: 'sp-val' }, `${v}/${max}`),
+      h('div', { class: 'sp-bar' }, h('i', { style: `width:${pct}%` })));
+  }
+  return statusRow(f.name, v);
+}
+/**
+ * 填一區（角色狀態／玩家狀態）。兩區都沒有欄位：兩區都不顯示（只有圖片）；
+ * 只有一區有欄位：另一區留著空位（sp-blank），玩家狀態永遠從同一個位置開始
+ */
+function fillStatusSection(sec, title, rows, otherHas = false, actions = []) {
+  sec.hidden = !rows.length && !otherHas;
+  sec.classList.toggle('sp-blank', !rows.length);
+  $('.sp-sec-name', sec).textContent = title;
+  const head = $('.sp-sec-head', sec);
+  head.querySelector('.sp-acts')?.remove();
+  if (actions.length) head.append(h('div', { class: 'sp-acts' }, actions));
+  $('.sp-sec-body', sec).replaceChildren(...rows);
+}
+
+// ---------- 面板上手動編輯狀態（按區塊標題的「編輯」；生成中不能改） ----------
+// state.spEdit = { chat, char, side: 'char'|'user', draft: { key: 值 } }：正在編輯的那一區（換對話就取消）
+/** 編輯中的一列：名稱＋輸入框（數值有最大值時限制 0～最大值）；Enter 儲存、Esc 取消 */
+function statusEditRow(f, ed) {
+  const num = f.type === 'number';
+  const input = h('input', { type: num ? 'number' : 'text', value: ed.draft[f.key] ?? '', 'aria-label': f.name,
+    ...(num ? { step: 'any', ...(f.max ? { min: 0, max: f.max } : {}) } : { maxlength: 200 }) });
+  input.oninput = () => { ed.draft[f.key] = input.value; };
+  input.onkeydown = e => {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); saveStatusEdit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancelStatusEdit(); }
+  };
+  return h('label', { class: 'sp-row sp-edit-row' }, statusKey(f.name), input, f.max ? h('span', { class: 'sp-max' }, '/' + f.max) : null);
+}
+function startStatusEdit(side, def, valOf) {
+  if (state.generating) return;
+  const fields = side === 'char' ? def.char : def.user;
+  state.spEdit = { chat: state.chatId, char: state.char.id, member: state.char.is_world ? state.spWorld?.member ?? null : null, side, draft: Object.fromEntries(fields.map(f => [f.key, String(valOf(side, f) ?? '')])) };
+  renderStatusPanel();
+  $(`#${side === 'char' ? 'spChar' : 'spUser'} .sp-edit-row input`)?.focus();
+}
+function cancelStatusEdit() { state.spEdit = null; renderStatusPanel(); }
+async function saveStatusEdit() {
+  const ed = state.spEdit;
+  if (!ed || ed.saving || state.generating) return;
+  const def = statusDefOf(state.char);
+  // 先在畫面上檢查一次（伺服器也會檢查）：數值要是數字、在範圍內
+  for (const f of ed.side === 'char' ? def.char : def.user) {
+    const v = String(ed.draft[f.key] ?? '').trim();
+    if (f.type !== 'number' || !v) continue;
+    if (!/^-?\d+(\.\d+)?$/.test(v)) return toast(`「${f.name}」要是數字`, true);
+    if (f.max && (Number(v) < 0 || Number(v) > f.max)) return toast(`「${f.name}」要在 0～${f.max} 之間`, true);
+  }
+  const charId = state.char.id, chatId = state.chatId;
+  ed.saving = true; renderStatusPanel();
+  try {
+    const r = await api('PUT', `/api/characters/${charId}/chats/${chatId}/status`, { [ed.side]: ed.draft, base_ver: state.chat.msg_ver, ...(ed.member ? { member: ed.member } : {}) });
+    if (state.chatId !== chatId) return;
+    // 只換狀態與訊息版本（不整份換掉 state.chat：畫面上的訊息還握著原本的物件）
+    r.messages.forEach((m, i) => { const cur = state.chat.messages[i]; if (cur && m.swipe_status) cur.swipe_status = m.swipe_status; });
+    state.chat.msg_ver = r.msg_ver; state.spEdit = null;
+    renderStatusPanel();
+    toast('狀態已更新');
+  } catch (e) {
+    fail(e);
+    if (state.spEdit === ed) { ed.saving = false; renderStatusPanel(); }
+    // 其他視窗改過這段對話：重新讀取（和存訊息時一樣）
+    if (e.status === 409 && state.chatId === chatId) {
+      try { state.chat = await api('GET', `/api/characters/${charId}/chats/${chatId}`); renderMessages(); } catch { /* 讀不到就維持原樣 */ }
+    }
+  }
+}
+function renderStatusPanel() {
+  const ch = state.char;
+  $('#btnStatusPanel').hidden = !state.chat; // 沒有選對話時不顯示開關
+  if (!ch || !state.chat) return;
+  // 圖片的順序（設計稿第七節）：目前狀態的表情 → 預設表情 → 封面 → 頭像 → 名字的首字。
+  // 網址帶版本（表情圖的修改時間、img_ver），換圖後不會讀到快取；網址沒變就不重畫，避免更新標題、記憶時圖片閃一下
+  // 大世界：圖片與「角色的狀態」顯示選到的那位角色（頭像列切換），玩家的狀態只有一份
+  const pick = ch.is_world ? worldPanelPick(ch) : null;
+  $('#chatView').classList.toggle('sp-world', !!pick);
+  renderMemberStrip(pick);
+  const who = pick ? pick.member : ch; // 圖片、角色區的標題用誰
+  const wst = ch.is_world ? worldStatus(state.chat.messages) : null;
+  // 目前狀態（和角色卡同樣的樣子：{ char, user, expression }）
+  const st = ch.is_world ? (pick ? { char: wst.chars[who.id], user: wst.user, expression: wst.exprs[who.id] } : { user: wst.user }) : currentStatus(state.chat.messages);
+  const ex = ch.is_world && !pick ? null : findExpr(who, st?.expression) || findExpr(who, defaultExpr(who));
+  const box = $('#spImg'), key = `${who.id}|${ex ? exprUrl(who.id, ex) : hasImg(who) ? imgUrl(who, who.has_cover ? 'cover' : 'avatar') : ''}|${charName(who)}`;
+  if (box.dataset.key !== key) {
+    box.dataset.key = key;
+    // 沒有成員的世界：顯示世界的封面（橫的）。第二個參數一定要是 true／false：
+    // 一般角色的 is_world 是 undefined，toggle 收到 undefined 會當成沒給、變成來回切換，每換一張表情圖框就在 3:4 和 16:9 之間跳
+    box.classList.toggle('wide', !!(ch.is_world && !pick));
+    // replaceChildren 會把 null 變成「null」文字：沒有的項目先濾掉
+    box.replaceChildren(...[ex
+      ? zoomable(h('img', { class: 'sp-pic', src: exprUrl(who.id, ex), alt: exprLabel(ex.name) }))
+      : zoomable(coverEl(who, 'sp-pic')),
+      ex ? h('span', { class: 'sp-expr', title: '目前的表情' }, exprLabel(ex.name)) : null].filter(Boolean));
+  }
+  // 狀態欄位：卡片（世界卡）定義的欄位＋目前狀態的值；還沒有任何狀態（舊對話）時顯示欄位的初始值
+  // 欄位定義被刪掉的值不顯示；內容沒變就不重畫（串流時每次更新訊息都會走到這裡）
+  const def = statusDefOf(ch);
+  if (ch.is_world && !pick) def.char = []; // 沒有成員：只有玩家的狀態
+  // 這份狀態裡沒有的欄位（例如對話開始後才新增的欄位）也用初始值
+  const valOf = (side, f) => (st?.[side] && Object.hasOwn(st[side], f.key) ? st[side][f.key] : f.initial);
+  // 編輯中的那一區：換了對話、角色（大世界換了選到的角色）就取消
+  const memberId = pick ? who.id : null;
+  if (state.spEdit && (state.spEdit.chat !== state.chatId || state.spEdit.char !== ch.id || state.spEdit.member !== memberId)) state.spEdit = null;
+  const ed = state.spEdit;
+  const sig = JSON.stringify([def, def.char.map(f => valOf('char', f)), def.user.map(f => valOf('user', f)), charName(who), memberId, userName(),
+    ed ? [ed.side, !!ed.saving] : null, !!state.generating]);
+  const panel = $('#statusPanel');
+  if (panel.dataset.sig === sig) return;
+  panel.dataset.sig = sig;
+  // 有變動的欄位短暫高亮，數值顯示變化量（+5）：和上一次畫的比（同一段對話、同一位角色才比，剛打開對話時不標）
+  // 大世界每次都記下所有角色的值：角色發言完自動切過去時，和他上一次的值比
+  const now = { char: {}, user: {} };
+  const lastOf = state.spLast?.chat === state.chatId && state.spLast?.char === ch.id ? state.spLast : null;
+  const last = lastOf ? (pick ? { char: lastOf.members?.[memberId], user: lastOf.vals?.user } : lastOf.vals) : null;
+  const row = side => f => {
+    const v = valOf(side, f);
+    now[side][f.key] = v;
+    const el = statusFieldRow(f, v);
+    const old = last?.[side]?.[f.key];
+    if (last && old !== undefined && String(old ?? '') !== String(v ?? '')) markChanged(el, f, old, v);
+    return el;
+  };
+  // 區塊標題右邊的按鈕：平常是「編輯」（生成中停用）；編輯中是「取消」「儲存」
+  const acts = side => {
+    if (ed?.side === side) return [
+      h('button', { type: 'button', class: 'small', disabled: !!ed.saving, onclick: cancelStatusEdit }, '取消'),
+      h('button', { type: 'button', class: 'small primary', disabled: !!ed.saving || !!state.generating, title: state.generating ? '生成中不能修改狀態' : '', onclick: saveStatusEdit }, ed.saving ? '儲存中…' : '儲存')];
+    return [h('button', { type: 'button', class: 'small sp-edit-btn', disabled: !!state.generating, title: state.generating ? '生成中不能修改狀態' : '手動修改這一區的狀態',
+      onclick: () => startStatusEdit(side, def, valOf) }, ic('pencil', '編輯'))];
+  };
+  const rowsOf = (side, fields) => {
+    if (ed?.side === side) { for (const f of fields) now[side][f.key] = valOf(side, f); return fields.map(f => statusEditRow(f, ed)); }
+    return fields.map(row(side));
+  };
+  fillStatusSection($('#spChar'), charName(who), rowsOf('char', def.char), def.user.length > 0, def.char.length ? acts('char') : []);
+  fillStatusSection($('#spUser'), userName(), rowsOf('user', def.user), def.char.length > 0, def.user.length ? acts('user') : []);
+  let members;
+  if (pick) {
+    members = {};
+    for (const m of worldMembers(ch)) {
+      const c = wst.chars[m.id];
+      members[m.id] = Object.fromEntries(def.char.map(f => [f.key, c && Object.hasOwn(c, f.key) ? c[f.key] : f.initial]));
+    }
+  }
+  state.spLast = { chat: state.chatId, char: ch.id, vals: now, members };
+}
+/** 這次有變動的欄位：高亮一下；數值欄位在旁邊顯示變化量（動畫關閉時直接顯示，不閃） */
+function markChanged(el, f, oldV, newV) {
+  el.classList.add('sp-changed');
+  const a = Number(oldV), b = Number(newV);
+  if (f.type !== 'number' || !String(oldV ?? '').trim() || !Number.isFinite(a) || !Number.isFinite(b) || a === b) return;
+  const d = Math.round((b - a) * 100) / 100;
+  $('.sp-val', el).append(h('span', { class: 'sp-delta ' + (d > 0 ? 'up' : 'down') }, (d > 0 ? '+' : '') + d)); // 接在數值後面：35/100 +5
+}
+
 /**
  * 把畫面上的訊息存回伺服器。被拒絕時（例如這段對話正在背景或另一個視窗生成，409）
  * 重新讀取伺服器上的內容並重畫，畫面不會停在「看起來改好了、其實沒存到」的樣子。回傳是否成功
  */
 /** 存訊息與名稱；extra：同一次一起存的欄位（例如記憶進度），避免分兩次存、第二次失敗時資料對不上 */
+/** 只存一則訊息（編輯、切換版本）：不用把整段對話送給伺服器。失敗時和 saveChat 一樣重新讀取 */
+async function saveMessage(i) {
+  if (!state.chat) return false;
+  const charId = state.char.id, chatId = state.chatId;
+  try {
+    const r = await api('PUT', `/api/characters/${charId}/chats/${chatId}/messages/${i}`, { message: state.chat.messages[i], base_ver: state.chat.msg_ver });
+    if (state.chatId === chatId && state.chat) {
+      state.chat.msg_ver = r.msg_ver;
+      if (r.memory_stale) state.chat.memory_stale = true;
+    }
+    return r; // 成功時回傳伺服器的回應（memory_stale：改到已經整理進記憶的內容）
+  } catch (e) {
+    fail(e);
+    if (state.chatId === chatId) {
+      try { state.chat = await api('GET', `/api/characters/${charId}/chats/${chatId}`); renderMessages(); } catch { /* 讀不到就維持原樣 */ }
+    }
+    return false;
+  }
+}
 async function saveChat(extra = {}) {
   if (!state.chat) return false;
   const charId = state.char.id, chatId = state.chatId;
@@ -715,8 +1065,8 @@ async function saveChat(extra = {}) {
     // 不帶名稱：改名另外存（renameChat），免得把別的視窗改好的名稱蓋回舊的。
     // base_ver：這個畫面讀到的訊息版本；另一個視窗改過訊息（例如剛產生新訊息）時伺服器會拒絕，不會把它蓋掉
     const r = await api('PUT', `/api/characters/${charId}/chats/${chatId}`, { messages: state.chat.messages, base_ver: state.chat.msg_ver, ...extra });
-    if (state.chatId === chatId && state.chat) for (const k of ['memory', 'memory_upto', 'memory_cut', 'present', 'msg_ver']) { if (k in r) state.chat[k] = r[k]; else delete state.chat[k]; }
-    return true;
+    if (state.chatId === chatId && state.chat) for (const k of ['memory', 'memory_upto', 'memory_cut', 'present', 'msg_ver', 'deleted']) { if (k in r) state.chat[k] = r[k]; else delete state.chat[k]; }
+    return r; // 成功時回傳伺服器的回應（memory_updating：背景正在重新整理記憶）
   } catch (e) {
     fail(e);
     if (state.chatId === chatId) {
@@ -746,7 +1096,8 @@ function renderMessages() {
   }
   state.renderFrom = Math.max(0, Math.min(state.renderFrom || 0, msgs.length - 1));
   const frag = document.createDocumentFragment();
-  for (let i = state.renderFrom; i < msgs.length; i++) if (msgs[i]) frag.append(renderMessage(msgs[i], i));
+  for (let i = state.renderFrom; i < msgs.length; i++) if (msgs[i]) frag.append(...deletedAt(i), renderMessage(msgs[i], i));
+  frag.append(...deletedAt(msgs.length, true)); // 刪掉的是最後幾則：框放在最後面
   box.innerHTML = '';
   box.append(earlierBar(), frag);
   if (!msgs.length) box.append(h('div', { class: 'empty muted' }, '這個角色沒有開場白，直接開始聊天吧。'));
@@ -768,9 +1119,13 @@ function prependEarlier(count) {
   const from = Math.max(0, state.renderFrom - count);
   state.renderTarget = Math.min(state.renderTarget ?? from, from); // 使用者往上捲：目標跟著往前
   const frag = document.createDocumentFragment();
-  for (let i = from; i < state.renderFrom; i++) if (msgs[i]) frag.append(renderMessage(msgs[i], i));
+  for (let i = from; i < state.renderFrom; i++) if (msgs[i]) frag.append(...deletedAt(i), renderMessage(msgs[i], i));
   const oldH = box.scrollHeight, oldTop = box.scrollTop;
-  box.querySelector(':scope > .msg')?.before(frag);
+  // 補在最上面一則（和它前面的「訊息已刪除」框）之前
+  const first = box.querySelector(':scope > .msg');
+  let anchor = first;
+  while (anchor?.previousElementSibling?.classList.contains('del-ph')) anchor = anchor.previousElementSibling;
+  anchor?.before(frag);
   state.renderFrom = from;
   $('#loadEarlier')?.replaceWith(earlierBar());
   box.scrollTop = oldTop + (box.scrollHeight - oldH);
@@ -872,6 +1227,11 @@ function renderMessage(m, i) {
     // 較舊的 AI 回應也可以重新生成：之後的訊息存成分支，或直接刪掉
     actions.append(btn(ic('refresh-cw', '重新生成'), '從這則重新生成（之後的訊息可以先存成分支）', () => regenerateFrom(i)), h('span', { class: 'sep' }));
   }
+  // 編輯過的訊息：編輯按鈕左邊可以切換最初版與最後送出的版本
+  const ed = editOf(m);
+  if (ed) actions.append(ed.orig
+    ? btn(ic('redo-2', '最新版'), '目前顯示的是最初的版本；換回最後編輯的版本', () => toggleEdited(i))
+    : btn(ic('undo-2', '還原'), '換回最初的版本（再按一次回到編輯後的版本）', () => toggleEdited(i)));
   actions.append(
     btn(ic('pencil', '編輯'), '編輯這則訊息', () => editMessage(i)),
     btn(ic('copy', '複製'), '複製內容', () => navigator.clipboard.writeText(m.content).then(() => toast('已複製'))),
@@ -898,12 +1258,48 @@ function renderMessage(m, i) {
   return h('div', { class: 'msg ' + (isUser && !asOther ? 'user' : 'bot') + (sp?.narrator || asOther ? ' narrator' : '') + (asOther ? ' npc-line' : '') + (isLast ? ' last' : ''), 'data-i': i }, av, h('div', { class: 'mcol' }, head, body, actions));
 }
 
+/**
+ * 編輯紀錄：只留「最初版」和「最後送出的版本」，中間改過的過程不留。每個版本（swipe）各自一份：m.edits[版本編號]。
+ * { other: 目前沒顯示的那一版, orig: true＝目前顯示的是最初版 }；content 一律是目前顯示的那一版（送給 AI 的就是它）
+ */
+const editOf = m => { const e = m.edits?.[m.swipe_id || 0]; return e && typeof e.other === 'string' ? e : null; };
+function setEdited(m, text) {
+  const k = m.swipe_id || 0, e = editOf(m);
+  const original = e ? (e.orig ? m.content : e.other) : m.content;
+  m.edits = { ...(m.edits || {}) };
+  if (text === original) delete m.edits[k]; // 改回和最初版一樣：當成沒改過
+  else m.edits[k] = { other: original };
+  if (!Object.keys(m.edits).length) delete m.edits;
+}
+/**
+ * 已經整理進記憶的訊息改了內容：編輯當下只提醒，記憶先不動；
+ * 開著自動整理時，下次送出、產生新的回應之後才在背景從頭重新整理（伺服器的 memory_stale）
+ */
+function memoryNoteForEdit(r) {
+  if (!r?.memory_stale) return;
+  toast(r.memory_later
+    ? '這則已經整理進記憶，記憶裡暫時還是原本的內容。下次送出、產生新的回應後，會自動重新整理記憶。'
+    : '這則已經整理進記憶，記憶裡還是原本的內容。需要時可以在「對話設定 → 記憶」按「全部重新整理」。', false, 8000);
+}
+/** 編輯過的訊息：在最初版與最後送出的版本之間切換 */
+async function toggleEdited(i) {
+  if (state.generating) return;
+  const m = state.chat.messages[i], e = editOf(m);
+  if (!e) return;
+  const k = m.swipe_id || 0, shown = m.content;
+  m.content = e.other;
+  if (m.swipes) m.swipes[k] = e.other;
+  m.edits = { ...m.edits, [k]: e.orig ? { other: shown } : { other: shown, orig: true } };
+  const r = await saveMessage(i);
+  if (r) { renderMessages(); memoryNoteForEdit(r); }
+}
 function editMessage(i) {
   if (state.generating) return;
   const m = state.chat.messages[i];
   const el = $(`#messages .msg[data-i="${i}"]`);
   const textEl = $('.mtext', el);
   $('.mactions', el).hidden = true;
+  const before = m.content;
   const ta = h('textarea', { class: 'edit', value: m.content });
   // 你這一側的訊息：可以改成用哪個身分說的（你的角色／你寫的旁白／你扮演的 NPC）
   const who = m.role === 'user' ? h('select', { class: 'as-who', title: '這則是用誰的身分說的' },
@@ -915,13 +1311,16 @@ function editMessage(i) {
   }
   const done = async save => {
     if (save) {
+      if (ta.value !== m.content) setEdited(m, ta.value);
       m.content = ta.value;
       if (m.swipes) m.swipes[m.swipe_id || 0] = ta.value;
       if (who) {
         delete m.npc; delete m.narration;
         if (who.value.startsWith('npc:')) m.npc = who.value.slice(4); else if (who.value === 'narration') m.narration = true;
       }
-      await saveChat();
+      const changed = ta.value !== before;
+      const r = await saveMessage(i);
+      if (r && changed) memoryNoteForEdit(r);
     }
     renderMessages();
   };
@@ -936,25 +1335,103 @@ function editMessage(i) {
     h('button', { class: 'primary', onclick: () => done(true) }, '儲存'))));
   ta.focus(); ta.style.height = Math.min(ta.scrollHeight + 10, 500) + 'px';
 }
+/**
+ * 「訊息已刪除」的框（伺服器存在 chat.deleted，不是訊息：不會送給 AI、不會匯出）。
+ * 第 i 則訊息前面的框；atEnd：位置在 i 以後的全部（刪掉的是最後幾則，放在最後面）
+ */
+function deletedAt(i, atEnd = false) {
+  const list = (state.chat?.deleted || []).filter(d => (atEnd ? d.i >= i : d.i === i));
+  return list.map(d => {
+    const n = d.msgs?.length || 0;
+    const first = d.msgs?.[0];
+    const peek = first ? String(splitThink(first.content || '').vis).replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+    return h('div', { class: 'del-ph', 'data-del': d.id, title: `刪除於 ${fmtTime(d.time)}${peek ? '\n' + peek + (n > 1 ? `…（共 ${n} 則）` : '') : ''}` },
+      h('span', {}, n > 1 ? `已刪除 ${n} 則訊息` : '訊息已刪除'), '－',
+      h('button', { title: '把刪掉的訊息放回這裡', onclick: () => restoreDeleted(d.id).catch(fail) }, '還原'),
+      h('button', { class: 'del-x', title: '關掉這個框（刪掉的訊息就不留了）', onclick: () => dismissDeleted(d.id).catch(fail) }, icon('x')));
+  });
+}
+/**
+ * 刪掉（或拿掉）已經整理進記憶的訊息之後：伺服器會在背景從頭重新整理記憶（memory_updating），
+ * 記憶關閉或關閉自動整理時不會，提醒可以手動整理
+ */
+function memoryNoteForDelete(r, charId, chatId) {
+  if (r.memory_updating) {
+    watchMemory(charId, chatId, '刪掉的訊息已經整理進記憶，正在背景重新整理記憶…');
+    toast('刪掉的訊息已經整理進記憶，正在背景重新整理記憶。原本的記憶留成「上一版」，需要時可以在「對話設定 → 記憶」換回來。', false, 8000);
+  } else if (r.memory_cleared) toast('整理進記憶的訊息都刪掉了，記憶已清空（原本的留成「上一版」）。', false, 7000);
+  else if (r.in_memory) toast('刪除的訊息已經整理進記憶，記憶裡可能還留著那段劇情（目前關閉了自動整理）。需要時可以在「對話設定 → 記憶」按「全部重新整理」。', false, 9000);
+}
+/** 換上伺服器回傳的整段對話並重畫（刪除、還原訊息之後） */
+function takeChat(chat, chatId) {
+  if (state.chatId !== chatId || !state.chat) return false;
+  state.chat = chat;
+  renderMessages(); refreshChatList();
+  return true;
+}
+/** 訊息操作被拒絕（別的視窗改過、生成中）：重新讀取，畫面回到伺服器上的樣子 */
+async function reloadAfterFail(e, charId, chatId) {
+  fail(e);
+  if (state.chatId !== chatId) return;
+  try { state.chat = await api('GET', `/api/characters/${charId}/chats/${chatId}`); renderMessages(); } catch { /* 讀不到就維持原樣 */ }
+}
+async function restoreDeleted(id) {
+  if (state.generating || !state.chat) return;
+  const d = (state.chat.deleted || []).find(x => x.id === id);
+  if (!d) return;
+  const charId = state.char.id, chatId = state.chatId;
+  const msgs = state.chat.messages;
+  // 刪除之後又有新訊息（在框之後、時間比刪除晚）：和重新生成一樣先決定怎麼處理它們
+  const later = msgs.filter((m, j) => j >= d.i && (m.time || 0) > d.time).length;
+  const run = async mode => {
+    closeModal();
+    if (state.generating || state.chatId !== chatId) return;
+    let r;
+    try { r = await api('POST', `/api/characters/${charId}/chats/${chatId}/deleted/${id}/restore`, { mode, base_ver: state.chat.msg_ver }); }
+    catch (e) { return reloadAfterFail(e, charId, chatId); }
+    if (!takeChat(r.chat, chatId)) return;
+    if (r.branch) toast(`原本的對話已存成分支「${charName(state.char)}（分支）」，可以在對話清單找到`, false, 6000);
+    else if (mode === 'drop') toast(`已還原。還原前的完整對話留了一份在垃圾桶，${trashDaysText()}`, false, 7000);
+    else toast('已還原刪除的訊息');
+    if (r.memory_updating) {
+      watchMemory(charId, chatId, '正在背景重新整理記憶…');
+      toast('記憶裡沒有還原的訊息（或拿掉了整理過的新訊息），正在背景重新整理記憶。', false, 7000);
+    } else if (r.gap) toast('還原的訊息不在目前的記憶裡（刪除之後記憶重新整理過）。需要時可以在「對話設定 → 記憶」按「全部重新整理」。', false, 9000);
+  };
+  if (!later) return run();
+  openModal('還原刪除的訊息', h('div', {},
+    h('p', {}, `這則刪除之後又有 ${later} 則訊息，還原會回到刪除當時的狀態。要怎麼處理之後的訊息？`),
+    h('p', { class: 'muted small-note' }, '存成分支：目前的完整對話另存一段（之後可以在對話清單打開），這裡回到刪除當時的樣子。'),
+    h('p', { class: 'muted small-note' }, '刪除：之後的訊息直接刪掉；還原前的完整對話會先留一份在垃圾桶。')), [
+    h('button', { onclick: closeModal }, '取消'),
+    h('button', { class: 'primary', onclick: () => run('branch').catch(fail) }, '存成分支並還原'),
+    h('button', { class: 'danger', onclick: () => run('drop').catch(fail) }, `刪除之後的 ${later} 則並還原`)]);
+}
+async function dismissDeleted(id) {
+  if (state.generating || !state.chat) return;
+  const charId = state.char.id, chatId = state.chatId;
+  const r = await api('DELETE', `/api/characters/${charId}/chats/${chatId}/deleted/${id}`);
+  if (state.chatId !== chatId || !state.chat) return;
+  state.chat.deleted = r.deleted;
+  $(`#messages .del-ph[data-del="${id}"]`)?.remove();
+}
 async function deleteMessage(i) {
   if (state.generating) return;
+  const charId = state.char.id, chatId = state.chatId;
   const del = async all => {
     closeModal();
-    // 刪掉的是已經整理進記憶的訊息：後面的訊息會往前移，記憶進度與壓縮的切點也要退回刪除的位置，
-    // 不然會有沒整理過的訊息被當成「已壓縮」而不再送給 AI。和訊息一起、一次存檔
-    const c = state.chat;
-    const inMemory = i < (c.memory_upto || 0) || i < (c.memory_cut || 0);
-    const many = all && c.messages.length - i > 1;
-    state.chat.messages.splice(i, all ? Infinity : 1);
-    // 一次刪掉好幾則：伺服器先把刪除前的完整對話留一份在垃圾桶（刪錯了可以還原）
-    const ok = await saveChat({ ...(inMemory ? { memory_upto: Math.min(c.memory_upto || 0, i), memory_cut: Math.min(c.memory_cut || 0, i) } : {}), ...(many ? { snapshot: 'delete' } : {}) });
-    if (!ok) return; // 存檔失敗：saveChat 已經重新讀取，畫面回到原本的樣子
-    if (inMemory && state.chat.memory?.trim()) toast('刪除的訊息已經整理進記憶，記憶裡可能還留著那段劇情。需要時可以在「對話設定 → 記憶」按「全部重新整理」。', false, 9000);
-    renderMessages(); refreshChatList();
-    if (many) toast(`已刪除。刪除前的完整對話留了一份在垃圾桶，${trashDaysText()}`, false, 7000);
+    if (state.generating || state.chatId !== chatId) return;
+    // 伺服器刪除並在原本的位置留一個「訊息已刪除」的框；記憶進度、壓縮切點跟著往前移（只移刪掉的則數）
+    const many = all && state.chat.messages.length - i > 1;
+    let r;
+    try { r = await api('POST', `/api/characters/${charId}/chats/${chatId}/messages/${i}/delete`, { all, base_ver: state.chat.msg_ver }); }
+    catch (e) { return reloadAfterFail(e, charId, chatId); }
+    if (!takeChat(r.chat, chatId)) return;
+    memoryNoteForDelete(r, charId, chatId);
+    if (many) toast(`已刪除。刪除前的完整對話也留了一份在垃圾桶，${trashDaysText()}`, false, 7000);
   };
   openModal('刪除訊息', h('div', {}, h('p', {}, '要刪除這一則訊息，還是刪除這一則以及之後的所有訊息？'),
-    h('p', { class: 'muted small-note' }, '刪除此則及之後：刪除前的完整對話會先留一份在垃圾桶，刪錯了可以還原。只刪除一則時不會另外保留。')), [
+    h('p', { class: 'muted small-note' }, '刪除的位置會留一個「訊息已刪除」的框，按「還原」可以放回去（每段對話保留最近 10 筆）。刪除此則及之後時，刪除前的完整對話也會留一份在垃圾桶。')), [
     h('button', { onclick: closeModal }, '取消'),
     h('button', { class: 'danger', onclick: () => del(true) }, '刪除此則及之後'),
     h('button', { class: 'danger', onclick: () => del(false) }, '只刪除此則')]);
@@ -983,10 +1460,12 @@ function regenerateFrom(i) {
     c.messages.splice(cutAt);
     // 直接刪除之後的訊息：刪除前的完整對話先留一份在垃圾桶（存成分支時原本的對話已經另存，不用再留）
     const extra = { ...(inMemory ? { memory_upto: Math.min(c.memory_upto || 0, cutAt), memory_cut: Math.min(c.memory_cut || 0, cutAt) } : {}), ...(keepBranch ? {} : { snapshot: 'delete' }) };
-    if (!await saveChat(extra)) return;
+    const memBefore = !!c.memory?.trim();
+    const r = await saveChat(extra);
+    if (!r) return;
     renderMessages(); refreshChatList();
     if (keepBranch) toast(`原本的對話已存成分支「${charName(state.char)}（分支）」，可以在對話清單找到`, false, 6000);
-    if (inMemory && c.memory?.trim()) toast('刪掉的訊息已經整理進記憶，記憶裡可能還留著那段劇情。需要時可以在「對話設定 → 記憶」按「全部重新整理」。', false, 9000);
+    if (inMemory && memBefore) memoryNoteForDelete({ ...r, in_memory: true, memory_cleared: !r.memory_updating && !r.memory?.trim() }, charId, chatId);
     generate('regenerate');
   };
   openModal('重新生成這則回應', h('div', {},
@@ -1019,7 +1498,7 @@ async function swipe(i, dir) {
   m.swipe_id = next; m.content = m.swipes[next];
   if (m.swipe_reasoning[next]) m.reasoning = m.swipe_reasoning[next]; else delete m.reasoning;
   if (m.swipe_timing[next]) m.timing = m.swipe_timing[next]; else delete m.timing;
-  await saveChat(); renderMessages(); showUsage();
+  await saveMessage(i); renderMessages(); showUsage();
 }
 
 // ---------- 生成 ----------
@@ -1036,12 +1515,13 @@ async function generate(mode, userMessage, opts = {}) {
 
   // 樂觀更新畫面
   const msgs = state.chat.messages;
-  if (mode === 'normal' && userMessage) msgs.push({ role: 'user', content: userMessage, time: Date.now(), ...(opts.npc ? { npc: opts.npc } : opts.narration ? { narration: true } : {}) });
+  // _pending：還沒確定伺服器收到的（連不上時拿掉；伺服器回應後整段對話會換成伺服器的版本）
+  if (mode === 'normal' && userMessage) msgs.push({ role: 'user', content: userMessage, time: Date.now(), _pending: true, ...(opts.npc ? { npc: opts.npc } : opts.narration ? { narration: true } : {}) });
   let target, prefix = '';
   const last = msgs[msgs.length - 1];
   if (mode === 'regenerate' && last?.role === 'assistant') { target = last; target.content = ''; target.reasoning = ''; }
   else if (mode === 'continue' && last?.role === 'assistant') { target = last; prefix = last.content; }
-  else { target = { role: 'assistant', content: '', time: Date.now() }; msgs.push(target); }
+  else { target = { role: 'assistant', content: '', time: Date.now(), _pending: true }; msgs.push(target); }
   if (opts.speaker) target.speaker = opts.speaker;
   renderMessages();
   const body = JSON.stringify({ char_id: state.char.id, chat_id: state.chatId, mode, user_message: userMessage, speaker: opts.speaker, interrupt: opts.interrupt, npc: opts.npc, narration: opts.narration });
@@ -1090,17 +1570,21 @@ async function runStream(open, { prefix = '', resume = false, restore = '' }) {
       $('summary .lbl', tb).textContent = vis.trim() ? '思考過程' : '思考中…（點開查看）';
       $('.think-body', tb).textContent = allThink;
     }
-    el.innerHTML = formatText(vis);
+    // 狀態欄的標籤先不顯示（完成後伺服器會拿掉）；卡片沒有狀態欄也沒有表情圖時照原樣顯示（伺服器也不會拿掉）
+    el.innerHTML = formatText(usesStatus(state.char) ? hideStatusTags(vis) : vis);
     const box = $('#messages');
     if (box.scrollHeight - box.scrollTop - box.clientHeight < 200) box.scrollTop = box.scrollHeight;
   };
 
+  // 伺服器還沒收下訊息（拒絕了，或根本連不上）：把打好的字放回輸入框（也會存回草稿），不要讓它不見
+  const putBack = () => { if (restore && here() && !$('#input').value.trim()) { $('#input').value = restore; autoGrow(); } };
+  let opened = false;
   try {
     const res = await open(ac.signal);
+    opened = true;
     if (!res.ok) {
       if (resume) throw Object.assign(new Error('done'), { name: 'AbortError' }); // 剛好已經生成完
-      // 伺服器還沒收下訊息就拒絕了（例如這段對話正在別處生成）：把打好的字放回輸入框，不要讓它不見
-      if (restore && here() && !$('#input').value.trim()) { $('#input').value = restore; autoGrow(); }
+      putBack(); // 例如這段對話正在別處生成
       throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
     }
     const reader = res.body.getReader();
@@ -1185,10 +1669,15 @@ async function runStream(open, { prefix = '', resume = false, restore = '' }) {
     }
   } catch (e) {
     if (state.genToken !== token) return; // 已經離開這段對話：生成在背景繼續
-    if (e.name !== 'AbortError') fail(e);
+    if (!opened) putBack(); // 連不上伺服器（網路斷線、伺服器關掉了）
+    if (e.name !== 'AbortError') fail(opened ? e : new Error(restore ? '連不上伺服器，訊息沒有送出' : '連不上伺服器'));
     // 錯誤時重新從伺服器讀取，確保畫面與存檔一致
     await new Promise(r => setTimeout(r, 150));
-    try { if (here()) state.chat = await api('GET', `/api/characters/${charId}/chats/${chatId}`); } catch { }
+    try { if (here()) state.chat = await api('GET', `/api/characters/${charId}/chats/${chatId}`); }
+    catch {
+      // 也讀不到：拿掉畫面上先放上去、其實沒送出的那兩則（你的訊息與空白的回覆），免得看起來像已經送出了
+      if (!opened && here()) state.chat.messages = state.chat.messages.filter(m => !m._pending);
+    }
   } finally {
     stopWait();
     if (state.genToken === token) {
@@ -1230,6 +1719,7 @@ function setBusy(b) {
   $('#btnSend').hidden = b; $('#btnStop').hidden = !b;
   $('#btnContinue').disabled = b;
   $('#btnAddOnly').disabled = b;
+  if (state.chat) renderStatusPanel(); // 狀態欄的「編輯」「儲存」：生成中停用
 }
 
 // ---------- 用誰的身分說話：你的角色／你自己寫的旁白／你扮演的 NPC（只有名字，存在這段對話） ----------

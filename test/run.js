@@ -43,6 +43,8 @@ function cleanup() {
   await start(['server.js'], {
     PORT: String(port), HOST: '127.0.0.1',
     TAVERN_DATA_DIR: path.join(tmp, 'data'), TAVERN_CONFIG: path.join(tmp, 'config.json'), TAVERN_WINDOW_FILE: path.join(tmp, 'window.json'), TAVERN_RUNTIME_DIR: path.join(tmp, 'runtime'),
+    TAVERN_DOWNLOAD_DIR: path.join(tmp, 'downloads'), // 匯出時直接存檔：寫到暫存資料夾，不碰真正的下載資料夾
+    TAVERN_PROFILE_DIR: path.join(tmp, 'app-profile'), // 清理快取：不碰真正的 data/app-profile
     OPENAI_API_KEY: '', GEMINI_API_KEY: '', ANTHROPIC_API_KEY: '',
     TAVERN_GEMINI_URL: `http://127.0.0.1:${mockPort}/gemini`, // Gemini 原生 API 改連假的服務
     TAVERN_UPDATE_URL: `http://127.0.0.1:${mockPort}/github/releases/latest`, // 檢查更新改連假的服務
@@ -55,7 +57,7 @@ function cleanup() {
   const code = await new Promise(resolve => {
     const t = spawn(process.execPath, [path.join(__dirname, 'api.test.js')], {
       cwd: ROOT, stdio: 'inherit',
-      env: { ...process.env, TEST_BASE: `http://127.0.0.1:${port}`, MOCK_URL: `http://127.0.0.1:${mockPort}`, MOCK_LOG_DIR: logDir, SERVER_LOG: serverLog, TAVERN_DATA_DIR: path.join(tmp, 'data'), TAVERN_CONFIG: path.join(tmp, 'config.json'), TAVERN_WINDOW_FILE: path.join(tmp, 'window.json'), TAVERN_RUNTIME_DIR: path.join(tmp, 'runtime') },
+      env: { ...process.env, TEST_BASE: `http://127.0.0.1:${port}`, MOCK_URL: `http://127.0.0.1:${mockPort}`, MOCK_LOG_DIR: logDir, SERVER_LOG: serverLog, TAVERN_DATA_DIR: path.join(tmp, 'data'), TAVERN_CONFIG: path.join(tmp, 'config.json'), TAVERN_WINDOW_FILE: path.join(tmp, 'window.json'), TAVERN_RUNTIME_DIR: path.join(tmp, 'runtime'), TAVERN_DOWNLOAD_DIR: path.join(tmp, 'downloads'), TAVERN_PROFILE_DIR: path.join(tmp, 'app-profile') },
     });
     t.on('exit', resolve);
   });

@@ -194,6 +194,9 @@ input.card-order-input { position: absolute; top: 8px; left: 8px; z-index: 2; wi
 .detail-tokens .dt-total { display: inline-flex; align-items: center; gap: 4px; color: var(--text); font-size: 13px; }
 .detail-tokens .dt-total .ic { width: 14px; height: 14px; color: var(--accent); }
 .detail-tokens b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* 檢視頁的「匯入對話」小按鈕：放在 token 那一列的最右邊（大世界沒有 token 列，自己一列靠右） */
+.detail-tokens .import-chat { margin-left: auto; cursor: pointer; }
+.detail-import { justify-content: flex-end; cursor: default; }
 .order-tag { border: none; background: transparent; padding: 2px 4px; font-size: 12px; color: var(--muted); cursor: text; border-radius: 6px; font-variant-numeric: tabular-nums; }
 .order-tag:hover, .order-tag:focus-visible { color: var(--accent); background: var(--panel2); outline: none; }
 /* 比一般輸入框小：剛好放得下 4 位數（要蓋過 input[type=text] 的預設寬度與內距） */
@@ -242,6 +245,130 @@ input.card-order-input { position: absolute; top: 8px; left: 8px; z-index: 2; wi
 .side-foot button { flex: 1; padding: 6px 4px; font-size: 13px; }
 
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* ----- 狀態欄面板（對話頁右側；設計稿：docs/狀態欄設計稿.md） ----- */
+/* 頁首以下分成左右兩塊：訊息與輸入區｜狀態欄面板。面板不佔頁首的寬度，頁首的選單與「對話設定」不受影響 */
+#chatBody { flex: 1; display: flex; min-height: 0; position: relative; overflow: hidden; } /* overflow：收起時滑到右邊外面的面板不會撐出捲軸 */
+#chatCol { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+#chatView { --sp-w: 288px; } /* 狀態欄面板的寬度（電腦版） */
+#chatView.sp-open #chatCol { margin-right: var(--sp-w); } /* 電腦版：面板把訊息區往左推（不覆蓋訊息） */
+/* 訊息區右緣中間的小按鈕：收起時「<<」展開、打開時「>>」收合；往內移一點，不擋到訊息的捲軸 */
+/* 位置：捲軸（約 15px）左邊、訊息內距（16px）裡面，不壓到右側的使用者頭像 */
+.sp-toggle { position: absolute; right: 15px; top: 50%; transform: translateY(-50%); z-index: 5; width: 15px; height: 44px; padding: 0;
+  display: flex; align-items: center; justify-content: center; border-radius: 8px;
+  background: var(--panel); color: var(--muted); opacity: .75; transition: opacity .15s, color .15s, border-color .15s; }
+.sp-toggle:hover { opacity: 1; color: var(--accent); }
+.sp-toggle > .ic { width: 12px; height: 12px; }
+#chatView.sp-open .sp-expand, #chatView:not(.sp-open) .sp-collapse { display: none; }
+/* 面板：電腦版疊在頁首下方的右邊，開關時用 transform 滑進滑出（不逐格重排版面，比較順）；開關記在這台裝置（#chatView.sp-open）
+   收起時 visibility: hidden，不會被 Tab 鍵選到；動畫跟著「設定 → 外觀 → 動畫」 */
+#statusPanel { position: absolute; top: 0; right: 0; bottom: 0; z-index: 6; width: var(--sp-w); display: flex; flex-direction: column; min-height: 0;
+  background: var(--panel); border-left: 1px solid var(--border);
+  transform: translateX(100%); visibility: hidden; transition: transform .2s cubic-bezier(.3, .7, .3, 1), visibility .2s; }
+#chatView.sp-open #statusPanel { transform: none; visibility: visible; }
+html[data-motion="off"] #statusPanel, #chatView.sp-no-anim #statusPanel { transition: none; } /* 動畫關閉、剛進對話時：直接切換 */
+#btnStatusPanel.on { color: var(--accent); background: var(--panel2); }
+.sp-mask { display: none; }
+/* 圖片：固定 3:4、完整顯示不裁切；最多佔面板一半不到，大小只看面板高度（不看欄位多寡），下面兩區的位置才固定 */
+.sp-img { flex: none; aspect-ratio: 3 / 4; max-height: 48%; background: var(--panel); border-bottom: 1px solid var(--border); overflow: hidden; }
+.sp-img.wide { aspect-ratio: 16 / 9; } /* 大世界的封面是橫的 */
+.sp-img { position: relative; }
+/* 顯示表情圖時，左下角的小標籤：目前的表情名稱 */
+.sp-expr { position: absolute; left: 8px; bottom: 8px; max-width: calc(100% - 16px); padding: 1px 8px; border-radius: 999px; font-size: 11px;
+  background: rgba(8, 14, 32, .72); border: 1px solid rgba(180, 200, 255, .2); color: var(--text); pointer-events: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-img > .sp-pic { width: 100%; height: 100%; display: block; object-fit: contain; }
+.sp-img > .avatar-ph.sp-pic { display: grid; font-size: 72px; background: transparent; } /* 沒有圖：名字的首字置中 */
+/* 大世界：圖片下方一列在場角色的頭像（和世界編輯頁加入角色的頭像同樣是圓形），角色多時左右滑動；
+   選到的角色外框亮起，這一輪狀態或表情有變動、還沒看過的角色右上角亮一個小點 */
+#chatView.sp-world .sp-img { max-height: 42%; }
+.sp-members { flex: none; display: flex; gap: 8px; padding: 8px 10px 6px; overflow-x: auto; overscroll-behavior-x: contain;
+  scrollbar-width: thin; border-bottom: 1px solid var(--border); }
+.sp-members[hidden] { display: none; }
+.sp-mem { position: relative; flex: none; width: 40px; height: 40px; padding: 0; border-radius: 50%; border: 2px solid transparent; background: transparent; cursor: pointer; }
+.sp-mem > .m-av { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; object-position: center 20%; font-size: 16px; display: grid; place-items: center; }
+.sp-mem:hover { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.sp-mem.on { border-color: var(--accent); }
+.sp-mem.lit::after { content: ""; position: absolute; top: -1px; right: -1px; width: 10px; height: 10px; border-radius: 50%;
+  background: #ffcf5a; border: 2px solid var(--bg); box-shadow: 0 0 6px #ffcf5a; animation: sp-lit 1.6s ease-in-out 3; }
+@keyframes sp-lit { 50% { box-shadow: 0 0 1px #ffcf5a; opacity: .65; } }
+html[data-motion="off"] .sp-mem.lit::after { animation: none; }
+/* 圖片下方平分成兩區：上面角色狀態、下面玩家狀態（淡淡的底色區隔）。玩家狀態永遠從同一個位置開始往下，
+   不跟著角色欄位的多寡移動；兩區內容多時各自捲動 */
+.sp-sec { display: flex; flex-direction: column; min-height: 0; }
+.sp-char { flex: 1 1 0; }
+.sp-user { flex: 1 1 0; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--user-name) 5%, transparent); }
+.sp-sec.sp-blank { visibility: hidden; } /* 這一區沒有欄位：留著位置，另一區不會移動 */
+.sp-sec-head { flex: none; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 12px 2px; }
+.sp-sec-name { flex: 1; min-width: 0; font-weight: 700; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-user .sp-sec-name { color: var(--user-name); }
+/* 區塊標題右邊：「編輯」或「取消」「儲存」 */
+.sp-acts { display: flex; gap: 4px; flex: none; }
+.sp-acts button.small { padding: 1px 8px; font-size: 12px; }
+.sp-acts .sp-edit-btn { background: transparent; border-color: transparent; color: var(--muted); }
+.sp-acts .sp-edit-btn:hover:not(:disabled) { color: var(--text); border-color: var(--border); }
+.sp-acts .sp-edit-btn .ic { width: 12px; height: 12px; }
+/* 編輯中：名稱｜輸入框（｜/最大值） */
+.sp-row.sp-edit-row { align-items: center; gap: 6px; }
+.sp-edit-row input { flex: 1; min-width: 0; padding: 2px 6px; font-size: 13px; }
+.sp-edit-row .sp-max { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.sp-sec-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 2px 12px 10px; display: grid; align-content: start; gap: 4px; font-size: 14px; }
+.sp-row { display: flex; gap: 2px; line-height: 1.55; }
+.sp-key { flex: none; color: var(--muted); }
+/* 名稱至少 4 個字寬、平均分散（兩端對齊）：冒號的位置對齊；超過 4 個字照原本的寬度往右推。編輯時一樣，輸入框也對齊 */
+.sp-kn { display: inline-block; min-width: 4em; text-align: justify; text-align-last: justify; white-space: nowrap; }
+.sp-key::after { content: "："; }
+.sp-val { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; }
+/* 數值欄位：有最大值時，名稱與數值同一行，下面一條進度條 */
+.sp-row.sp-num { display: grid; grid-template-columns: auto 1fr; column-gap: 2px; row-gap: 3px; }
+.sp-num .sp-val { text-align: right; font-variant-numeric: tabular-nums; }
+.sp-bar { grid-column: 1 / -1; height: 6px; border-radius: 999px; background: var(--panel2); overflow: hidden; }
+.sp-bar > i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 70%, #10183a), var(--accent)); }
+/* 這次回覆有變動的欄位：底色閃一下；數值的變化量（+5／-3）幾秒後淡出 */
+.sp-row.sp-changed { border-radius: 6px; animation: sp-flash 2.4s ease-out; }
+@keyframes sp-flash { 0%, 25% { background: color-mix(in srgb, var(--accent) 22%, transparent); } 100% { background: transparent; } }
+.sp-delta { display: inline-block; margin-left: 5px; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; animation: sp-fade 4s ease-in forwards; }
+.sp-delta.up { color: #5fd38a; }
+.sp-delta.down { color: var(--danger); }
+@keyframes sp-fade { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+html[data-motion="off"] .sp-row.sp-changed, html[data-motion="off"] .sp-delta { animation: none; }
+.sp-val.sp-none { flex: none; color: var(--muted); } /* 沒有值的「—」：緊接在冒號後面 */
+/* 角色編輯頁 → 狀態欄：每個欄位一列（名稱｜類型｜最大值｜初始值｜按鈕），下一行是說明 */
+.sf-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sf-top .sf-tpl { width: auto; min-width: 160px; }
+.sf-row { display: grid; gap: 5px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
+.sf-row input, .sf-row select { padding: 3px 8px; font-size: 14px; }
+.sf-main { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sf-main .sf-name { flex: 0 1 300px; width: auto; min-width: 100px; font-weight: 600; } /* 固定寬度：類型選單在每一列都同一個位置 */
+.sf-main select { flex: none; width: 76px; }
+/* 「最大」「初始」：小字標籤＋輸入框（.form label 預設是上下排，這裡改成同一行） */
+.form .sf-lab, .sf-lab { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.sf-lab > span { white-space: nowrap; }
+.sf-lab.sf-init { flex: 0 1 230px; min-width: 110px; } /* 文字的初始值 */
+.sf-lab.sf-num { flex: 0 0 104px; min-width: 0; } /* 數值的初始、最大：固定的小寬度 */
+.sf-lab input { min-width: 0; }
+.sf-btns { display: flex; gap: 0; margin-left: auto; }
+.sf-btns button.icon { padding: 2px 5px; }
+.sf-hint { font-size: 13px !important; color: var(--text); }
+/* 角色編輯頁 → 表情圖：工具列＋縮圖格子（圖片下面是表情名稱，有中文對照就顯示「開心（joy）」） */
+.ex-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.form .ex-def-lab, .ex-def-lab { display: flex; align-items: center; gap: 6px; margin-left: auto; font-size: 13px; color: var(--muted); }
+.ex-def-lab select { width: auto; max-width: 220px; }
+.ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 10px; }
+.ex-item { display: grid; gap: 4px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); min-width: 0; }
+.ex-item.is-default { border-color: var(--accent); }
+.ex-item img { width: 100%; aspect-ratio: 3 / 4; object-fit: contain; border-radius: 6px; background: var(--bg); display: block; }
+.ex-name { font-size: 12px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ex-btns { display: flex; justify-content: center; gap: 2px; }
+/* 還沒上傳的預設表情：虛線空格，點了上傳 */
+button.ex-item.ex-empty { display: grid; justify-items: stretch; align-content: start; border-style: dashed; background: transparent; color: var(--muted); white-space: normal; font-weight: 400; }
+button.ex-item.ex-empty:hover { border-color: var(--accent); color: var(--accent); }
+.ex-empty .ex-ph { aspect-ratio: 3 / 4; border-radius: 6px; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 60%, transparent); }
+.ex-empty .ex-ph .ic { width: 24px; height: 24px; }
+.ex-empty .ex-up { font-size: 11px; text-align: center; }
+.ex-btns button.icon { padding: 2px 6px; }
+/* 手機版的 ✕：疊在圖片右上角 */
+.sp-close { position: absolute; top: 8px; right: 8px; z-index: 1; width: 32px; height: 32px; padding: 0; border-radius: 50%; background: rgba(8, 14, 32, .7); border: 1px solid rgba(180, 200, 255, .2); }
 #chatHead { display: flex; align-items: center; gap: 10px; padding: 8px 18px; border-bottom: 1px solid var(--border); background: var(--panel); min-height: 56px; }
 .head-info { flex: 1; min-width: 0; }
 .chat-title { font-weight: 700; font-size: 17px; cursor: text; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 6px; padding: 0 4px; margin-left: -4px; }
@@ -278,7 +405,8 @@ input.card-order-input { position: absolute; top: 8px; left: 8px; z-index: 2; wi
 .prof-row select { flex: 1 1 200px; min-width: 0; width: 0; } /* width: 0＋flex：寬度只看版面，不看選項文字多長 */
 #chatHead input { font-weight: 700; font-size: 16px; max-width: 480px; }
 
-#messages { flex: 1; overflow-y: auto; padding: 18px max(16px, calc((100% - 860px) / 2)); display: flex; flex-direction: column; gap: 16px; }
+/* scrollbar-gutter：一開始訊息少、還沒有捲軸時就先留好捲軸的位置，訊息變多出現捲軸時對話框不會突然變窄 */
+#messages { flex: 1; overflow-y: auto; scrollbar-gutter: stable; padding: 18px max(16px, calc((100% - 860px) / 2)); display: flex; flex-direction: column; gap: 16px; }
 .empty { margin: auto; text-align: center; color: var(--text); }
 .msg { display: flex; gap: 10px; align-items: flex-start; }
 .msg .mav { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; object-position: center 20%; flex: none; background: var(--panel2); display: grid; place-items: center; color: var(--accent); font-weight: 700; }
@@ -302,6 +430,12 @@ input.card-order-input { position: absolute; top: 8px; left: 8px; z-index: 2; wi
 .mactions button { background: none; border: 1px solid transparent; padding: 1px 7px; font-size: 12px; color: var(--muted); border-radius: 6px; }
 .mactions button:hover:not(:disabled) { color: var(--text); border-color: var(--border); background: var(--panel2); }
 #messages.busy .mactions button { opacity: .35; pointer-events: none; } /* 生成中：訊息下方的按鈕暫時不能按 */
+/* 「訊息已刪除」的框：放在刪掉的位置，可以還原或關掉（不是訊息，不會送給 AI） */
+.del-ph { display: flex; align-items: center; gap: 6px; align-self: center; margin: 2px auto; padding: 3px 6px 3px 12px; border: 1px dashed var(--danger); border-radius: 10px; color: var(--danger); font-style: italic; font-size: 13px; max-width: 100%; }
+.del-ph button { background: none; border: 1px solid transparent; padding: 1px 7px; font-size: 12px; color: var(--danger); font-style: italic; border-radius: 6px; }
+.del-ph button:hover:not(:disabled) { border-color: var(--danger); background: var(--panel2); }
+.del-ph .del-x { font-style: normal; padding: 1px 4px; color: var(--muted); }
+#messages.busy .del-ph button { opacity: .35; pointer-events: none; }
 #messages { overflow-anchor: none; } /* 往上補畫舊訊息時自己調整捲動位置 */
 /* 畫面外的訊息先不排版、不繪製（捲到附近才處理），很長的對話也不會變慢 */
 /* 最後 40 則一定完整排版，捲到最底、生成新訊息時位置才準確 */
@@ -456,8 +590,10 @@ q { quotes: none; }
 .persona-tip { color: var(--text); background: rgba(127, 160, 255, 0.08); border-left: 3px solid var(--accent); padding: 6px 10px; border-radius: 4px; }
 .ctx-room { color: var(--muted); margin-top: 4px; }
 .ctx-room.warn { color: var(--danger); }
-/* 使用者分頁最底下的頁尾：程式名稱、作者與版本 */
-.app-credit { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--muted); letter-spacing: .3px; }
+/* 設定頁：模型的上下文長度（取得模型清單時平台有提供的） */
+.ctx-model { color: var(--muted); margin: 4px 0 0; }
+.ctx-model.warn { color: var(--danger); }
+.ctx-model button { margin-left: 4px; vertical-align: baseline; }
 /* 設定檔損毀：固定在畫面上方的提示，按「×」才關掉 */
 .corrupt-banner { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 60; width: min(760px, calc(100% - 32px));
   display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--danger);
@@ -514,6 +650,11 @@ q { quotes: none; }
 /* 「（新增設定檔）」：灰色，和一般的設定檔區分（選中時選單本身也是灰字） */
 option.opt-new { color: var(--muted); }
 .prof-row select:has(option.opt-new:checked):not(.dirty) { color: var(--muted); }
+/* 對話語言：改過提醒文字時，選單顯示灰色的「（自訂）」 */
+option.opt-custom { color: var(--muted); }
+/* 只有選單本身變灰；展開後的選項維持原本的樣子（選項會繼承選單的字色） */
+select.lang-sel.custom { color: var(--muted); }
+select.lang-sel.custom option:not(.opt-custom) { color: var(--text); }
 /* 對話設定：世界書開關 */
 .book-toggles { display: flex; flex-direction: column; gap: 6px; }
 .book-toggles .muted { margin-left: 4px; font-size: 12px; }
@@ -773,7 +914,7 @@ html[data-motion="off"] details::details-content { transition: none; }
 .prompt-msg pre { margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13px; max-height: 300px; overflow: auto; }
 
 #toast { position: fixed; bottom: calc(var(--tabbar-h) + 16px); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; z-index: 100; pointer-events: none; }
-#toast div { background: var(--panel2); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+#toast div { background: var(--panel2); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; white-space: pre-line; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
 #toast div.err { border-color: var(--danger); color: #ffb3b3; }
 
 .only-mobile { display: none !important; }
@@ -782,6 +923,20 @@ html[data-motion="off"] details::details-content { transition: none; }
   #tabbar { padding: 0; }
   #sidebar { position: fixed; inset: 0 auto var(--tabbar-h) 0; z-index: 40; background: var(--panel-solid); width: 85vw; max-width: 320px; transform: translateX(-100%); transition: transform .2s; }
   #sidebar.open { transform: none; box-shadow: 0 0 30px rgba(0,0,0,.6); }
+  /* 狀態欄面板：比照左側欄，從右邊滑出蓋在畫面上（底部讓出下方的分頁列）；關著時 visibility: hidden，不會被 Tab 鍵選到 */
+  #statusPanel { position: fixed; inset: 0 0 var(--tabbar-h) auto; z-index: 40; width: 85vw; max-width: 340px; background: var(--panel-solid); }
+  #chatView.sp-open #statusPanel { box-shadow: 0 0 30px rgba(0,0,0,.6); }
+  #chatView.sp-open #chatCol { margin-right: 0; } /* 手機版蓋在畫面上，不推訊息區 */
+  .sp-collapse { display: none !important; } /* 手機版用遮罩或 ✕ 收合 */
+  .sp-toggle { right: 0; border-right: none; border-radius: 8px 0 0 8px; } /* 手機的捲軸不佔寬度：貼齊右緣，不壓到使用者頭像 */
+  #chatView.sp-open .sp-mask { display: block; position: fixed; inset: 0 0 var(--tabbar-h) 0; z-index: 39; background: rgba(2, 5, 16, .5); }
+  .sp-img { background: var(--panel-solid); }
+  /* 頁首：手機寬度放不下全部，縮小內距、間距，思考與模型選單縮到只剩圖示；標題至少留一點寬度、副標題太長顯示…
+     （不然標題會被擠成 0 寬，副標題變成一個字一行把頁首撐高）。「對話設定」維持原樣 */
+  #chatHead { padding: 8px 10px; gap: 6px; }
+  .head-info { min-width: 64px; }
+  .chat-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #chatHead .model-pick { padding: 0 2px 0 6px; }
   .editor-top { grid-template-columns: 1fr; }
   .mactions { opacity: 1; }
   .msg .mav { width: 34px; height: 34px; }

@@ -18,10 +18,10 @@
       <input id="charSearch" type="search" placeholder="搜尋角色或標籤…">
       <label class="model-pick home-sort" title="角色與世界卡片的排列順序（記在這台電腦）"><i data-icon="arrow-up-down"></i><select id="homeSort" aria-label="排序方式"></select></label>
       <div class="topbar-actions">
-        <button id="btnImport" title="匯入 PNG / JSON 角色卡（也可直接拖放檔案）"><i data-icon="import"></i>匯入</button>
+        <button id="btnImport" title="匯入 PNG / JSON / .charx 角色卡（也可直接拖放檔案）"><i data-icon="import"></i>匯入</button>
         <button id="btnWorlds"><i data-icon="book-open"></i>世界書</button>
       </div>
-      <input type="file" id="fileImport" accept=".png,.json,application/json,image/png" multiple hidden>
+      <input type="file" id="fileImport" accept=".png,.json,.charx" multiple hidden>
     </header>
     <main class="home-main">
       <!-- 兩個欄位都可以收合（點標題） -->
@@ -65,8 +65,12 @@
         <label class="model-pick think-pick"><i data-icon="brain"></i><span class="pick-label">思考：</span><select id="thinkPick" aria-label="思考程度"></select></label>
         <label class="model-pick" title="選擇模型設定檔（設定 → API 設定 → 模型設定檔）"><i data-icon="bot"></i><select id="modelPick"></select></label>
         <button id="btnChatSettings" class="small" title="只對這段對話有效的設定：聊天紀錄上限、記憶、清空聊天…"><i data-icon="sliders-horizontal"></i>對話設定</button>
+        <button id="btnStatusPanel" class="icon" title="狀態欄（顯示角色圖片與狀態）" aria-pressed="false"><i data-icon="panel-right"></i></button>
       </header>
 
+      <!-- 頁首以下：左邊是訊息與輸入區，右邊是狀態欄面板（面板不佔頁首的寬度） -->
+      <div id="chatBody">
+      <div id="chatCol">
       <div id="messages"></div>
 
       <!-- 大世界（輪流發言）：點頭像讓那個角色發言；生成中點別人＝插話 -->
@@ -88,6 +92,29 @@
           <button id="btnStop" class="danger" hidden><i data-icon="square"></i>停止</button>
         </div>
       </footer>
+      <!-- 訊息區右緣中間的小按鈕：面板收起時「<<」展開、打開時「>>」收合（頁首的按鈕照樣可以用） -->
+      <button id="btnSpExpand" class="sp-toggle sp-expand" title="展開狀態欄" aria-label="展開狀態欄"><i data-icon="chevrons-left"></i></button>
+      <button id="btnSpCollapse" class="sp-toggle sp-collapse" title="收合狀態欄" aria-label="收合狀態欄"><i data-icon="chevrons-right"></i></button>
+      </div>
+
+      <!-- 狀態欄面板（設計稿：docs/狀態欄設計稿.md）：由上到下是圖片、角色狀態、使用者狀態；使用者狀態一律貼齊底部。
+           電腦版在頁首下方、訊息區右邊；手機版從右邊滑出蓋在畫面上，點遮罩或 ✕ 關閉 -->
+      <div id="spMask" class="sp-mask"></div>
+      <aside id="statusPanel" aria-label="狀態欄">
+        <button id="btnCloseStatus" class="icon only-mobile sp-close" title="關閉"><i data-icon="x"></i></button>
+        <div id="spImg" class="sp-img"></div>
+        <!-- 大世界：在場角色的頭像，點了切換下面顯示的角色（角色多時左右滑動） -->
+        <div id="spMembers" class="sp-members" role="tablist" aria-label="切換角色" hidden></div>
+        <section id="spChar" class="sp-sec sp-char" hidden>
+          <div class="sp-sec-head"><span class="sp-sec-name"></span></div>
+          <div class="sp-sec-body"></div>
+        </section>
+        <section id="spUser" class="sp-sec sp-user" hidden>
+          <div class="sp-sec-head"><span class="sp-sec-name"></span></div>
+          <div class="sp-sec-body"></div>
+        </section>
+      </aside>
+      </div>
     </main>
   </div>
 

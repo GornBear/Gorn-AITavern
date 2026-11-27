@@ -747,6 +747,8 @@ function rawReq(method, url, headers = {}, body) {
     await j('PUT', '/api/settings', { openai: { model: 'jsonorg' } });
     r = await j('POST', '/api/bigworlds/organize-rules', orgBody());
     ok(r.status === 200 && r.data.shared === '不要替 {{user}} 說話。\n保持角色。' && r.data.results[0].keep === 'M1_JSON\n第二行', '模型回 JSON 且字串裡直接換行：照樣讀得懂', JSON.stringify(r.data).slice(0, 300));
+    ok(r.data.results.every(x => x.keep !== null) ? !fs.existsSync(path.join(path.dirname(process.env.TAVERN_WINDOW_FILE), 'organize-last.txt')) : true,
+      '整理成功（每位角色都有結果）：不留 organize-last.txt（裡面是角色設定與劇情）');
     await j('PUT', '/api/settings', { openai: { model: 'thinkorg' } });
     r = await j('POST', '/api/bigworlds/organize-rules', orgBody());
     ok(r.status === 502 && /只輸出了思考內容/.test(r.data.error), '只想完、沒寫出結果（用完回應長度）：說明原因與調整方式', r.data.error);
@@ -924,8 +926,8 @@ function rawReq(method, url, headers = {}, body) {
     const greq = gLast();
     ok(gev.filter(e => e.type === 'text').map(e => e.text).join('') === '雙子星回覆', 'Gemini：串流文字完整', JSON.stringify(gev.find(e => e.type === 'error')));
     const cats = greq.body.safetySettings.map(s => s.category).sort().join();
-    ok(cats === 'HARM_CATEGORY_CIVIC_INTEGRITY,HARM_CATEGORY_DANGEROUS_CONTENT,HARM_CATEGORY_HARASSMENT,HARM_CATEGORY_HATE_SPEECH,HARM_CATEGORY_SEXUALLY_EXPLICIT'
-      && greq.body.safetySettings.every(s => s.threshold === 'OFF'), 'Gemini：五個安全審查類別都設為 OFF', JSON.stringify(greq.body.safetySettings));
+    ok(cats === 'HARM_CATEGORY_DANGEROUS_CONTENT,HARM_CATEGORY_HARASSMENT,HARM_CATEGORY_HATE_SPEECH,HARM_CATEGORY_SEXUALLY_EXPLICIT'
+      && greq.body.safetySettings.every(s => s.threshold === 'OFF'), 'Gemini：四個安全審查類別都設為 OFF（不送公民誠信）', JSON.stringify(greq.body.safetySettings));
     ok(greq.key === 'GM_TEST_KEY' && !greq.url.includes('GM_TEST_KEY'), 'Gemini：金鑰放在標頭，不放網址');
     ok(greq.body.systemInstruction?.parts[0].text.includes('艾迪娜') && greq.body.contents[0].role === 'user' && greq.body.contents.some(c => c.role === 'model')
       && greq.body.contents.at(-1).parts[0].text.includes('你好'), 'Gemini：系統提示放在 systemInstruction，對話用 user／model', JSON.stringify(greq.body.contents.map(c => c.role)));
@@ -949,9 +951,6 @@ function rawReq(method, url, headers = {}, body) {
     gev = await gen({ char_id: id, chat_id: gchat, mode: 'normal', user_message: '政策' });
     const perr = gev.find(e => e.type === 'error');
     ok(perr && perr.error.includes('PROHIBITED_CONTENT') && perr.error.includes('無法用安全設定關閉'), 'Gemini：PROHIBITED_CONTENT 說明無法用安全設定關閉', JSON.stringify(perr));
-    await j('PUT', '/api/settings', { gemini: { model: 'gemini-nocivic', reasoning_effort: '' } });
-    gev = await gen({ char_id: id, chat_id: gchat, mode: 'normal', user_message: '公民' });
-    ok(gev.some(e => e.type === 'done') && gLast().body.safetySettings.length === 4, 'Gemini：模型不接受公民誠信類別時拿掉後重試', JSON.stringify(gev.find(e => e.type === 'error')));
     await j('PUT', '/api/settings', { gemini: { model: 'gemini-cut', reasoning_effort: '' } });
     gev = await gen({ char_id: id, chat_id: gchat, mode: 'normal', user_message: '寫一半' });
     const gtext = gev.filter(e => e.type === 'text').map(e => e.text).join('');
@@ -1267,6 +1266,26 @@ function rawReq(method, url, headers = {}, body) {
     r = await j('PUT', '/api/settings', { update_check: false });
     ok(r.data.settings.update_check === false, '可以關閉自動檢查更新');
     await j('PUT', '/api/settings', { update_check: true });
+    // 版本號比較：後面帶 -beta 的比正式版舊（beta 版的使用者才收得到正式版的更新）
+    const { isNewerVersion: nv } = require(path.join(PROJ, 'lib/version.js'));
+    ok(nv('2.0.0', '2.0.0-beta') && !nv('2.0.0-beta', '2.0.0') && nv('2.0.0-beta', '1.9.9') && nv('v2.0.1', '2.0.0') && !nv('2.0.0', '2.0.0')
+      && nv('2.0.0-beta.2', '2.0.0-beta') && nv('2.0.0-rc', '2.0.0-beta') && !nv('1.10.0-beta', '1.10.0') && nv('1.10.0', '1.9.0') && !nv('2.0.0+build5', '2.0.0'),
+    '版本號比較：2.0.0-beta 比 2.0.0 舊、比 1.9.9 新；beta.2 比 beta 新；「+」後面的不比');
+  }
+
+  // ===== 對話語言：選好的語言提醒可以改寫（自訂） =====
+  {
+    const st = (await j('GET', '/api/settings')).data;
+    ok(st.languages?.['zh-TW']?.includes('繁體中文') && st.languages.en.startsWith('[Language]'), '設定頁拿得到各語言的預設提醒（選語言時帶進輸入框）');
+    r = await j('PUT', '/api/settings', { reply_language: 'custom', language_custom: '【語言】請用台語漢字寫 LANGX' });
+    ok(r.status === 200 && r.data.settings.reply_language === 'custom' && r.data.settings.language_custom.includes('LANGX'), '對話語言可以存成「自訂」與自訂的文字');
+    const { languageNote } = require(path.join(PROJ, 'lib/prompt.js'));
+    ok(languageNote(r.data.settings).endsWith('LANGX') && languageNote({ reply_language: 'en', language_custom: 'LANGX' }).startsWith('[Language]')
+      && languageNote({ reply_language: 'custom', language_custom: '  ' }) === '', '組提示詞：自訂時送輸入框的內容，選語言時送預設文字，自訂成空白就不送');
+    ok((await j('PUT', '/api/settings', { reply_language: 'klingon' })).status === 400 && (await j('PUT', '/api/settings', { language_custom: 5 })).status === 400, '不認得的語言、不是文字的自訂內容：拒絕');
+    const sj = fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8');
+    ok(/'（自訂）'/.test(sj) && /language_custom: f\.reply_language\.value === 'custom'/.test(sj), '前端：改了提醒文字時選單變成「（自訂）」，儲存時送出輸入框的內容');
+    await j('PUT', '/api/settings', { reply_language: st.settings.reply_language, language_custom: '' });
   }
 
   // ===== 搜尋訊息內容（U1） =====
@@ -1868,6 +1887,1135 @@ function rawReq(method, url, headers = {}, body) {
     ok(r.status === 409, '整理記憶中更換名字：先擋下', r.status);
     await j('DELETE', url);
     await j('PUT', '/api/settings', { openai: { model: prevModel } });
+  }
+
+  // ===== 狀態欄：欄位定義的整理、開場白寫入初始值 =====
+  {
+    const { cleanStatusDef, initialStatus } = require(path.join(PROJ, 'lib/status.js'));
+    const many = Array.from({ length: 15 }, (_, i) => ({ name: '欄位' + i }));
+    let def = cleanStatusDef({ char_fields: many, user_fields: [] });
+    ok(def.char_fields.length === 12, '狀態欄：每邊最多 12 個欄位', def.char_fields.length);
+    def = cleanStatusDef({ char_fields: [
+      { key: 'f1', name: '  心情：\n現在 ', type: 'text', hint: 'x'.repeat(300), initial: '平靜' },
+      { key: 'f1', name: '好感度', type: 'number', max: 100, initial: '30' }, // key 重複：重新編號
+      { name: '心情 現在' }, // 整理後和第一個同名：拿掉
+      { name: '   ' }, // 沒有名稱：拿掉
+      { key: '壞 key!', name: '金錢', type: 'number', max: 'abc', initial: '很多' }, // 不是數字的最大值、初始值：拿掉
+      { name: '這個名稱非常非常非常非常非常非常非常長超過二十個字', type: 'weird', max: 5 },
+    ] });
+    const cf = def.char_fields;
+    ok(cf.length === 4 && cf[0].name === '心情 現在' && cf[0].hint.length === 200, '狀態欄：名稱拿掉冒號與換行、說明截到 200 字、空白與重複名稱略過', JSON.stringify(cf.map(f => f.name)));
+    ok(new Set(cf.map(f => f.key)).size === 4 && cf[0].key === 'f1' && cf.every(f => /^[\w-]+$/.test(f.key)), '狀態欄：key 重複或不合法時重新編號', JSON.stringify(cf.map(f => f.key)));
+    ok(cf[1].type === 'number' && cf[1].max === 100 && !('max' in cf[2]) && cf[2].initial === '', '狀態欄：數值欄位的最大值、初始值不是數字時拿掉', JSON.stringify(cf.slice(1, 3)));
+    ok(cf[3].name.length === 20 && cf[3].type === 'text' && !('max' in cf[3]), '狀態欄：名稱最多 20 字；未知類型當成文字，文字欄位沒有最大值', JSON.stringify(cf[3]));
+    ok(cleanStatusDef({ char_fields: [], user_fields: [{ name: '' }] }) === null && cleanStatusDef('x') === null, '狀態欄：沒有有效欄位時不留定義');
+    ok(JSON.stringify(initialStatus(def)) === JSON.stringify({ char: { f1: '平靜', f2: '30' }, user: {}, edited: false }), '狀態欄：初始狀態只放有初始值的欄位', JSON.stringify(initialStatus(def)));
+
+    // 存角色卡：伺服器整理欄位定義；沒有欄位就不留這個擴充
+    const status = { char_fields: [{ key: 'f1', name: '心情', type: 'text', initial: '平靜' }, { key: 'f2', name: '好感度', type: 'number', max: 100, initial: '30' }, { name: '位置', type: 'text' }],
+      user_fields: [{ key: 'u1', name: 'HP', type: 'number', max: 100, initial: '100' }] };
+    const sc = (await j('POST', '/api/characters', { data: { name: '狀態測試', first_mes: '你好', alternate_greetings: ['嗨'], extensions: { ai_tavern_status: status } } })).data;
+    let card = (await j('GET', `/api/characters/${sc.id}`)).data;
+    const sd = card.data.extensions.ai_tavern_status;
+    ok(sd && sd.char_fields.length === 3 && sd.char_fields[2].key === 'f3' && sd.user_fields[0].key === 'u1', '存角色卡：狀態欄位存在 extensions.ai_tavern_status，缺少的 key 自動補上', JSON.stringify(sd));
+    await j('PUT', `/api/characters/${sc.id}`, { data: { ...card.data, extensions: { ...card.data.extensions, ai_tavern_status: { char_fields: [], user_fields: [] } } } });
+    ok(!('ai_tavern_status' in (await j('GET', `/api/characters/${sc.id}`)).data.data.extensions), '存角色卡：欄位全部刪掉時不留這個擴充');
+    await j('PUT', `/api/characters/${sc.id}`, { data: card.data });
+
+    // 開新對話：開場白的每個版本都帶初始狀態（和 swipes 一一對應）
+    const sChat = (await j('POST', `/api/characters/${sc.id}/chats`, { greeting: 1 })).data;
+    const g = sChat.messages[0];
+    ok(Array.isArray(g.swipe_status) && g.swipe_status.length === g.swipes.length && g.swipes.length === 2, '開場白：swipe_status 和 swipes 一樣長', JSON.stringify(g.swipe_status));
+    ok(JSON.stringify(g.swipe_status[1]) === JSON.stringify({ char: { f1: '平靜', f2: '30' }, user: { u1: '100' }, edited: false }), '開場白：寫入各欄位的初始值', JSON.stringify(g.swipe_status[1]));
+    const op = (await j('GET', `/api/characters/${sc.id}/chats/${sChat.id}/opening?greeting=0`)).data;
+    ok(Array.isArray(op[0].swipe_status) && op[0].swipe_status[0].char.f1 === '平靜', '清空聊天用的開場白也帶初始狀態');
+    // 開場白是一串訊息（角色、旁白、你）時：初始狀態放在最後一則 assistant 訊息
+    await j('PUT', `/api/characters/${sc.id}`, { data: { ...card.data, first_mes: '旁白\n\n{{user}}：嗨\n\n你好', alternate_greetings: [],
+      extensions: { ...card.data.extensions, ai_tavern_openings: [[{ speaker: 'narrator', content: '旁白' }, { speaker: 'user', content: '嗨' }, { speaker: 'char', content: '你好' }]] } } });
+    const mChat = (await j('POST', `/api/characters/${sc.id}/chats`, {})).data;
+    ok(mChat.messages.length === 3 && !mChat.messages[0].swipe_status && mChat.messages[2].swipe_status?.[0]?.user?.u1 === '100', '多則開場白：初始狀態放在最後一則角色訊息', JSON.stringify(mChat.messages.map(m => !!m.swipe_status)));
+    // 匯出、匯入：欄位定義跟著角色卡走
+    const exp = (await j('GET', `/api/characters/${sc.id}/export?format=json`)).data;
+    ok(exp.data?.extensions?.ai_tavern_status?.char_fields?.length === 3, '匯出 JSON：帶著狀態欄位定義');
+    const imp = (await j('POST', '/api/characters/import', Buffer.from(JSON.stringify({ ...exp, data: { ...exp.data, name: '狀態匯入', extensions: { ai_tavern_status: { char_fields: [{ name: 'A：B' }, { name: 'A B' }] } } } })))).data;
+    const impDef = (await j('GET', `/api/characters/${imp.id}`)).data.data.extensions.ai_tavern_status;
+    ok(impDef?.char_fields.length === 1 && impDef.char_fields[0].name === 'A B', '匯入角色卡：狀態欄位一樣經過整理', JSON.stringify(impDef));
+    // 舊卡片（沒有狀態欄位）：開場白不帶 swipe_status
+    const plain = (await j('POST', '/api/characters', { data: { name: '沒有狀態', first_mes: '哈囉' } })).data;
+    const pChat = (await j('POST', `/api/characters/${plain.id}/chats`, {})).data;
+    ok(pChat.messages.length === 1 && !('swipe_status' in pChat.messages[0]), '沒有狀態欄位的角色卡：開場白不帶狀態');
+    for (const id of [sc.id, imp.id, plain.id]) await j('DELETE', `/api/characters/${id}`);
+  }
+
+  // ===== 狀態欄：模型輸出的解析 =====
+  {
+    const st = require(path.join(PROJ, 'lib/status.js'));
+    const def = st.cleanStatusDef({ char_fields: [{ key: 'f1', name: '心情' }, { key: 'f2', name: '好感度', type: 'number', max: 100, initial: '30' }],
+      user_fields: [{ key: 'u1', name: 'HP', type: 'number', max: 100, initial: '100' }, { key: 'u2', name: '心情' }] });
+    let x = st.extractTags('<thinking>先想 <status>[角色]\n心情：假的</status></thinking>\n正文。\n\n\n<status>\n心情：A\n</status>\n<status>\n心情：B\n</status>\n<expression>害羞</expression>');
+    ok(x.status.includes('心情：B') && x.expression === '害羞', '解析：同一則有兩個 <status> 取最後一個', JSON.stringify(x));
+    ok(x.text.startsWith('<thinking>先想 <status>') && x.text.endsWith('正文。') && !/<status>\s*心情：[AB]/.test(x.text), '解析：思考裡的假標籤不算也不動，正文的標籤拿掉', JSON.stringify(x.text));
+    x = st.extractTags('寫到一半\n<status>\n心情：');
+    ok(x.text === '寫到一半' && x.status === null, '解析：沒寫完的標籤（被截斷）拿掉，不算狀態', JSON.stringify(x));
+    const plain = '一般的回覆  \n\n\n\n不動';
+    ok(st.extractTags(plain).text === plain, '解析：沒有標籤的回覆原封不動');
+    let p = st.parseStatusBody('[角色]\n 心情 ： 緊張\n* 好感度:  約 42 點\n不存在：1\n[玩家]\n- HP：120\n心情：還好', def);
+    ok(p && p.char.f1 === '緊張' && p.char.f2 === '42' && p.user.u1 === '100' && p.user.u2 === '還好' && Object.keys(p.char).length === 2,
+      '解析：全形半形冒號、前後空白、條列符號、數值只取數字並限制在最大值內；分區對回角色／玩家的同名欄位', JSON.stringify(p));
+    p = st.parseStatusBody('[艾琳]\n心情：開心\n[旅人]\nHP：80', def, { charName: '艾琳', userName: '旅人' });
+    ok(p?.char.f1 === '開心' && p.user.u1 === '80', '解析：分區標題寫成角色名、玩家名也認得', JSON.stringify(p));
+    ok(st.parseStatusBody('好感度：很多\n不存在：1', def) === null, '解析：一個欄位都對不上時當作沒寫');
+    const prev = { char: { f1: '平靜', f2: '30' }, user: { u1: '100' }, edited: true };
+    const r = st.applyReplyStatus('好。\n<status>\n好感度：35\n</status>', def, prev);
+    ok(r.text === '好。' && JSON.stringify(r.status) === JSON.stringify({ char: { f1: '平靜', f2: '35' }, user: { u1: '100' }, edited: false }), '解析：只寫部分欄位時和上一份合併', JSON.stringify(r));
+    ok(st.applyReplyStatus('好。', def, prev).status === null, '解析：模型漏寫時這個版本存 null');
+    const msgs = [{ role: 'assistant', swipes: ['a', 'b'], swipe_id: 1, swipe_status: [{ char: { f1: 'A' } }, null] }, { role: 'user' },
+      { role: 'assistant', swipes: ['c', 'd'], swipe_id: 0, swipe_status: [{ char: { f1: 'C' } }, { char: { f1: 'D' } }] }];
+    ok(st.currentStatus(msgs).char.f1 === 'C', '目前狀態：看最新一則目前顯示的版本');
+    msgs[2].swipe_id = 1;
+    ok(st.currentStatus(msgs).char.f1 === 'D', '目前狀態：切換版本後跟著換');
+    msgs[0].swipe_id = 0; msgs.pop();
+    ok(st.currentStatus(msgs).char.f1 === 'A', '目前狀態：刪掉最後一則後回到前一份');
+    msgs[0].swipe_id = 1;
+    ok(st.currentStatus(msgs) === null, '目前狀態：目前的版本沒有狀態時往前找，都沒有就是 null');
+    const note = st.statusNote(def, prev);
+    ok(note.includes('<status>') && note.split('[目前狀態]').length === 2 && note.includes('好感度：30') && note.includes('HP：100'), '提示詞：輸出格式說明＋目前狀態（只出現一次）', note);
+    ok(st.statusNote(st.statusDefOf({}), null) === '', '提示詞：沒有欄位時完全不加這段');
+  }
+
+  // ===== 狀態欄：生成時送出說明、完成後解析存檔 =====
+  {
+    const prevModel = (await j('GET', '/api/settings')).data.settings.openai?.model;
+    const status = { char_fields: [{ key: 'f1', name: '心情', type: 'text', hint: '一兩個詞', initial: '平靜' }, { key: 'f2', name: '好感度', type: 'number', max: 100, initial: '30' }],
+      user_fields: [{ key: 'u1', name: 'HP', type: 'number', max: 100, initial: '100' }] };
+    const sc = (await j('POST', '/api/characters', { data: { name: '狀態生成', first_mes: '你好', extensions: { ai_tavern_status: status } } })).data;
+    const sChat = (await j('POST', `/api/characters/${sc.id}/chats`, {})).data;
+    const url = `/api/characters/${sc.id}/chats/${sChat.id}`;
+    await j('PUT', '/api/settings', { openai: { model: 'status' } });
+    await gen({ char_id: sc.id, chat_id: sChat.id, mode: 'normal', user_message: '出發吧' });
+    let req = lastReq();
+    // 聊天紀錄之後的 system 會變成「[系統備註：…]」的 user 訊息（lib/providers.js 的 normalizeMessages）
+    const tailText = req.messages.slice(1).map(m => m.content).join('\n');
+    ok(tailText.includes('[狀態欄]') && tailText.split('[目前狀態]').length === 2 && /\[目前狀態\][\s\S]*心情：平靜[\s\S]*好感度：30[\s\S]*HP：100/.test(tailText), '生成：送出狀態欄說明與目前狀態（初始值）', tailText.slice(-400));
+    ok(!req.messages[0].content.includes('[狀態欄]') && req.messages.at(-1).content.includes('[狀態欄]'), '生成：狀態欄說明放在聊天紀錄之後（系統提示開頭不變）');
+    let c = (await j('GET', url)).data;
+    let a = c.messages.at(-1);
+    ok(!/<status/i.test(a.content.replace(/<thinking>[\s\S]*?<\/thinking>/, '')) && a.content.endsWith('好的，我們出發吧。') && a.swipes[0] === a.content, '生成：存檔的內容與版本都拿掉了狀態標籤（思考裡的不動）', JSON.stringify(a.content));
+    ok(JSON.stringify(a.swipe_status) === JSON.stringify([{ char: { f1: '緊張但期待', f2: '35' }, user: { u1: '92' }, edited: false }]), '生成：解析出的狀態存在 swipe_status', JSON.stringify(a.swipe_status));
+    // 下一次送出：聊天紀錄裡沒有標籤，目前狀態是剛才那份（只出現一次）
+    await gen({ char_id: sc.id, chat_id: sChat.id, mode: 'normal', user_message: '繼續走' });
+    req = lastReq();
+    const all = req.messages.map(m => m.content).join('\n');
+    ok(all.split('[目前狀態]').length === 2 && /\[目前狀態\][\s\S]*心情：緊張但期待/.test(all) && !req.messages.filter(m => m.role === 'assistant').some(m => /<status/i.test(m.content.replace(/<thinking>[\s\S]*?<\/thinking>/g, ''))),
+      '生成：聊天紀錄裡不含狀態標籤，目前狀態只送一份');
+    // 重新生成（只寫部分欄位）：新版本和前一份狀態合併；目前狀態不算正在重新生成的這一則
+    await j('PUT', '/api/settings', { openai: { model: 'status-partial' } });
+    await gen({ char_id: sc.id, chat_id: sChat.id, mode: 'regenerate' });
+    req = lastReq();
+    ok(/\[目前狀態\][\s\S]*心情：緊張但期待/.test(req.messages.map(m => m.content).join('\n')), '重新生成：目前狀態是前一則的狀態（不算正在重新生成的這一則）');
+    c = (await j('GET', url)).data; a = c.messages.at(-1);
+    ok(a.swipes.length === 2 && a.swipe_status.length === 2 && a.swipe_status[1]?.char.f2 === '100' && a.swipe_status[1].char.f1 === '緊張但期待' && a.swipe_status[1].user.u1 === '92',
+      '重新生成：swipe_status 和 swipes 對齊，部分欄位合併、數值限制在最大值', JSON.stringify(a.swipe_status));
+    // 被截斷：拿掉半截標籤，這個版本沒有狀態；「繼續」接完後重新解析整則
+    await j('PUT', '/api/settings', { openai: { model: 'status-trunc' } });
+    await gen({ char_id: sc.id, chat_id: sChat.id, mode: 'normal', user_message: '然後呢' });
+    c = (await j('GET', url)).data; a = c.messages.at(-1);
+    ok(a.content === '寫到一半' && a.swipe_status?.[0] === null, '被截斷：半截的標籤拿掉，這個版本存 null（面板沿用上一份）', JSON.stringify([a.content, a.swipe_status]));
+    await j('PUT', '/api/settings', { openai: { model: 'status-partial' } });
+    await gen({ char_id: sc.id, chat_id: sChat.id, mode: 'continue' });
+    c = (await j('GET', url)).data; a = c.messages.at(-1);
+    ok(a.content.startsWith('寫到一半') && !/<status/i.test(a.content) && a.swipe_status?.[0]?.char.f2 === '100', '「繼續」：接完後對整則重新解析', JSON.stringify([a.content, a.swipe_status]));
+    // 提示詞預覽看得到狀態欄這段
+    const pv = (await j('POST', '/api/prompt-preview', { char_id: sc.id, chat_id: sChat.id })).data;
+    ok(pv.messages.some(m => m.content.includes('[狀態欄]')), '提示詞預覽：看得到狀態欄說明與目前狀態');
+    // 沒有狀態欄位的角色：不加說明，模型自己寫了標籤也照樣拿掉、不存狀態
+    const plainC = (await j('POST', '/api/characters', { data: { name: '沒有狀態欄', first_mes: '嗨' } })).data;
+    const plainChat = (await j('POST', `/api/characters/${plainC.id}/chats`, {})).data;
+    await j('PUT', '/api/settings', { openai: { model: 'status' } });
+    await gen({ char_id: plainC.id, chat_id: plainChat.id, mode: 'normal', user_message: '你好' });
+    req = lastReq();
+    const pc = (await j('GET', `/api/characters/${plainC.id}/chats/${plainChat.id}`)).data.messages.at(-1);
+    // 標籤原樣保留：很多卡片自己會叫模型寫 <status>，那是正文的一部分（以前會被拿掉，回覆就少了一段）
+    ok(!req.messages.some(m => m.content.includes('[狀態欄]')) && !('swipe_status' in pc) && pc.content.includes('好的，我們出發吧。\n<status>') && pc.content.endsWith('</status>'),
+      '沒有狀態欄位也沒有表情圖：不加說明、不存狀態，回覆裡的 <status> 原樣保留', JSON.stringify(pc));
+    // 編輯頁的 token 估算
+    const sn = (await j('POST', '/api/status-note', { def: status })).data;
+    ok(sn.tokens > 20 && sn.text.includes('[狀態欄]') && (await j('POST', '/api/status-note', { def: {} })).data.tokens === 0, '編輯頁：狀態欄說明的 token 估算', JSON.stringify(sn.tokens));
+    await j('PUT', '/api/settings', { openai: { model: prevModel } });
+    for (const id of [sc.id, plainC.id]) await j('DELETE', `/api/characters/${id}`);
+  }
+
+  // ===== 狀態欄：面板上手動編輯 =====
+  {
+    const st = require(path.join(PROJ, 'lib/status.js'));
+    const def = st.cleanStatusDef({ char_fields: [{ key: 'f1', name: '心情', initial: '平靜' }, { key: 'f2', name: '好感度', type: 'number', max: 100, initial: '30' }],
+      user_fields: [{ key: 'u1', name: '金錢', type: 'number' }] });
+    const v = st.cleanManualEdit(def, { char: { f1: '  開心  ', f2: '45', zz: 'x' }, user: { u1: '-20' } });
+    ok(JSON.stringify(v) === JSON.stringify({ char: { f1: '開心', f2: '45' }, user: { u1: '-20' } }), '手動編輯：不認得的欄位略過；沒有最大值的數值可以是負數', JSON.stringify(v));
+    const err = b => { try { st.cleanManualEdit(def, b); return null; } catch (e) { return e; } };
+    ok(err({ char: { f2: '很多' } })?.status === 400 && err({ char: { f2: '101' } })?.status === 400 && err({ char: { f2: '-1' } })?.status === 400 && !err({ char: { f2: '' } }),
+      '手動編輯：數值不是數字、超出 0～最大值時拒絕（400），可以留空');
+    // 寫到「目前狀態」所在的那則訊息、那個版本
+    const msgs = [{ role: 'assistant', swipes: ['a'], swipe_id: 0, swipe_status: [{ char: { f1: '平靜', f2: '30' }, user: {}, edited: false }] },
+      { role: 'user' }, { role: 'assistant', swipes: ['b', 'c'], swipe_id: 1, swipe_status: [{ char: { f1: 'B' } }, null] }];
+    let idx = st.applyManualStatus(msgs, def, { char: { f2: '50' }, user: {} });
+    ok(idx === 0 && msgs[0].swipe_status[0].char.f2 === '50' && msgs[0].swipe_status[0].char.f1 === '平靜' && msgs[0].swipe_status[0].edited === true && msgs[2].swipe_status[1] === null,
+      '手動編輯：寫進目前狀態所在的訊息與版本（目前版本沒有狀態時往前找），沒改的欄位沿用，標 edited', JSON.stringify(msgs[0].swipe_status));
+    const old = [{ role: 'assistant', content: '舊', swipes: ['舊', '舊2'], swipe_id: 1 }, { role: 'user', content: '嗨' }];
+    idx = st.applyManualStatus(old, def, { char: { f1: '累' }, user: {} });
+    ok(idx === 0 && old[0].swipe_status.length === 2 && old[0].swipe_status[0] === null && old[0].swipe_status[1].char.f1 === '累' && old[0].swipe_status[1].char.f2 === '30',
+      '手動編輯：舊對話（沒有任何狀態）寫到最後一則 assistant 訊息，其他欄位用初始值', JSON.stringify(old[0].swipe_status));
+    let threw = null; try { st.applyManualStatus([{ role: 'user' }], def, { char: {}, user: {} }); } catch (e) { threw = e; }
+    ok(threw?.status === 400, '手動編輯：沒有 assistant 訊息時拒絕');
+
+    // API
+    const prevModel = (await j('GET', '/api/settings')).data.settings.openai?.model;
+    const sc = (await j('POST', '/api/characters', { data: { name: '手動編輯', first_mes: '嗨', extensions: { ai_tavern_status: {
+      char_fields: [{ key: 'f1', name: '心情', initial: '平靜' }, { key: 'f2', name: '好感度', type: 'number', max: 100, initial: '30' }], user_fields: [{ key: 'u1', name: 'HP', type: 'number', max: 100, initial: '100' }] } } } })).data;
+    const ch = (await j('POST', `/api/characters/${sc.id}/chats`, {})).data;
+    const url = `/api/characters/${sc.id}/chats/${ch.id}`;
+    let r = await j('PUT', url + '/status', { char: { f2: '77' }, base_ver: ch.msg_ver ?? (await j('GET', url)).data.msg_ver });
+    ok(r.status === 200 && r.data.messages[0].swipe_status[0].char.f2 === '77' && r.data.messages[0].swipe_status[0].edited === true && r.data.msg_ver, 'PUT …/status：寫進開場白的狀態並回傳新的訊息版本', JSON.stringify(r.data.messages?.[0]?.swipe_status));
+    r = await j('PUT', url + '/status', { char: { f2: '200' } });
+    ok(r.status === 400 && /0～100/.test(r.data.error), 'PUT …/status：超出範圍時回 400', JSON.stringify(r.data));
+    r = await j('PUT', url + '/status', { user: { u1: '50' }, base_ver: 'stale-version' });
+    ok(r.status === 409, 'PUT …/status：畫面上的訊息版本過期時回 409');
+    // 下一次送出時，模型看到的是改過的值
+    await j('PUT', '/api/settings', { openai: { model: 'mock-a' } });
+    await gen({ char_id: sc.id, chat_id: ch.id, mode: 'normal', user_message: '你好' });
+    ok(/\[目前狀態\][\s\S]*好感度：77/.test(lastReq().messages.map(m => m.content).join('\n')), '手動編輯後送出：模型看到改過的值');
+    // 生成中不能改
+    await j('PUT', '/api/settings', { openai: { model: 'slow' } });
+    const running = gen({ char_id: sc.id, chat_id: ch.id, mode: 'normal', user_message: '慢慢說' });
+    await new Promise(res => setTimeout(res, 400));
+    r = await j('PUT', url + '/status', { char: { f1: '生氣' } });
+    await running;
+    ok(r.status === 409, 'PUT …/status：生成中拒絕（409）', r.status);
+    // 沒有欄位的卡、大世界：拒絕
+    const plain = (await j('POST', '/api/characters', { data: { name: '沒欄位', first_mes: '嗨' } })).data;
+    const pch = (await j('POST', `/api/characters/${plain.id}/chats`, {})).data;
+    r = await j('PUT', `/api/characters/${plain.id}/chats/${pch.id}/status`, { char: {} });
+    ok(r.status === 400, 'PUT …/status：沒有狀態欄位的角色卡回 400');
+    await j('PUT', '/api/settings', { openai: { model: prevModel } });
+    for (const id of [sc.id, plain.id]) await j('DELETE', `/api/characters/${id}`);
+  }
+
+  // ===== 表情圖 =====
+  {
+    const ex = require(path.join(PROJ, 'lib/expressions.js'));
+    const { readZip } = require(path.join(PROJ, 'lib/zip.js'));
+    const zlib = require('zlib');
+    const { solidPng } = require(path.join(PROJ, 'lib/png.js'));
+    const PNG = solidPng(8, 8, [200, 100, 50]);
+    const GIF = Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(20, 1)]);
+    const JPG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(20, 2)]);
+    const WEBP = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP'), Buffer.alloc(20, 3)]);
+    ok(ex.imageType(PNG) === 'png' && ex.imageType(GIF) === 'gif' && ex.imageType(JPG) === 'jpg' && ex.imageType(WEBP) === 'webp' && ex.imageType(Buffer.from('hello, this is text')) === null,
+      '表情圖：用檔頭判斷 PNG、GIF、JPEG、WebP，不是圖片回傳 null');
+    ok(ex.cleanName('../../x/joy.png', { stripExt: true }) === 'joy' && ex.cleanName('a:b*c?') === 'abc' && ex.cleanName('..') === '' && ex.cleanName('CON') === '' && [...ex.cleanName('長'.repeat(50))].length === 40,
+      '表情名稱：拿掉路徑、不允許的字元、保留名稱，最多 40 字');
+    // 自己做一個 ZIP（CRC 用不到：讀取時不檢查）
+    const zip = items => {
+      const locals = [], cds = []; let off = 0;
+      for (const it of items) {
+        const name = Buffer.from(it.name, 'utf8');
+        const data = it.method === 8 ? zlib.deflateRawSync(it.data) : it.data;
+        const lh = Buffer.alloc(30); lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(0x800, 6); lh.writeUInt16LE(it.method || 0, 8);
+        lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(it.usize ?? it.data.length, 22); lh.writeUInt16LE(name.length, 26);
+        const cd = Buffer.alloc(46); cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(0x800, 8); cd.writeUInt16LE(it.method || 0, 10);
+        cd.writeUInt32LE(data.length, 20); cd.writeUInt32LE(it.usize ?? it.data.length, 24); cd.writeUInt16LE(name.length, 28); cd.writeUInt32LE(off, 42);
+        locals.push(lh, name, data); cds.push(cd, name); off += 30 + name.length + data.length;
+      }
+      const cdBuf = Buffer.concat(cds), end = Buffer.alloc(22);
+      end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(items.length, 8); end.writeUInt16LE(items.length, 10); end.writeUInt32LE(cdBuf.length, 12); end.writeUInt32LE(off, 16);
+      return Buffer.concat([...locals, cdBuf, end]);
+    };
+    const z = readZip(zip([{ name: 'a.png', data: PNG }, { name: '難過.png', data: PNG, method: 8 }, { name: 'dir/', data: Buffer.alloc(0) }]));
+    ok(z.length === 2 && z[0].data.equals(PNG) && z[1].name === '難過.png' && z[1].data.equals(PNG), 'ZIP：讀得出不壓縮與 Deflate 的檔案（UTF-8 檔名），資料夾略過', JSON.stringify(z.map(x => x.name)));
+    const bomb = readZip(zip([{ name: 'bomb.png', data: Buffer.alloc(6 * 1024 * 1024), method: 8, usize: 100 }]));
+    ok(bomb[0].error === 'too_big' && !bomb[0].data, 'ZIP 炸彈：目錄寫的大小是假的，解壓超過上限也會中止');
+    let zErr = null; try { readZip(zip(Array.from({ length: 5 }, (_, i) => ({ name: i + '.png', data: PNG }))), { files: 3 }); } catch (e) { zErr = e; }
+    ok(zErr?.status === 400, 'ZIP：檔案數超過上限時拒絕');
+    zErr = null; try { readZip(Buffer.from('not a zip file at all, just text')); } catch (e) { zErr = e; }
+    ok(zErr?.status === 400, 'ZIP：不是 ZIP 檔時回 400');
+
+    // API
+    const raw = (method, url, body) => fetch(B + url, { method, body }).then(async r => ({ status: r.status, data: await r.json().catch(() => null) }));
+    const ec = (await j('POST', '/api/characters', { data: { name: '表情測試', first_mes: '你好', extensions: { ai_tavern_status: { char_fields: [{ key: 'f1', name: '心情', initial: '平靜' }] } } } })).data;
+    const base = `/api/characters/${ec.id}/expressions`;
+    let r = await raw('POST', `${base}?name=joy`, PNG);
+    ok(r.status === 200 && r.data.expressions.map(e => e.name).join() === 'joy', '表情圖：新增一張', JSON.stringify(r.data));
+    const img = await fetch(B + `/api/characters/${ec.id}/expression?name=JOY`);
+    ok(img.status === 200 && img.headers.get('content-type') === 'image/png', '表情圖：讀取圖片（名稱不分大小寫）', img.headers.get('content-type'));
+    r = await raw('POST', `${base}?name=note`, Buffer.from('這是一段文字，不是圖片'));
+    ok(r.status === 400, '表情圖：不是圖片時拒絕');
+    r = await raw('POST', `${base}?name=Joy`, GIF);
+    ok(r.status === 409, '表情圖：同名（不分大小寫）不取代時回 409');
+    r = await raw('POST', `${base}?name=joy&replace=1`, GIF);
+    const dir = path.join(TD, 'char', fs.readdirSync(path.join(TD, 'char')).find(d => d.endsWith(ec.id)), 'expressions');
+    ok(r.status === 200 && fs.readdirSync(dir).join() === 'joy.gif', '表情圖：取代時換成新格式，舊檔拿掉', fs.readdirSync(dir).join());
+    r = await raw('POST', `${base}?name=${encodeURIComponent('../../evil')}`, PNG);
+    ok(r.status === 200 && fs.existsSync(path.join(dir, 'evil.png')) && !fs.existsSync(path.join(dir, '..', '..', 'evil.png')), '表情圖：檔名裡的路徑拿掉，只會存在 expressions/ 裡');
+    r = await raw('POST', `${base}?name=big`, Buffer.concat([PNG, Buffer.alloc(5 * 1024 * 1024)]));
+    ok(r.status === 400 || r.status === 413, '表情圖：超過 5 MB 拒絕', r.status);
+    // 預設表情：改名、刪除時跟著改
+    let card = (await j('GET', `/api/characters/${ec.id}`)).data;
+    ok(Array.isArray(card.expressions) && card.expressions.some(e => e.name === 'joy' && e.ver > 0), '讀取角色：帶著表情清單與版本');
+    await j('PUT', `/api/characters/${ec.id}`, { data: { ...card.data, extensions: { ...card.data.extensions, ai_tavern_expressions: { default: 'joy' } } } });
+    r = await j('PUT', `${base}/rename`, { from: 'joy', to: '開心' });
+    ok(r.status === 200 && r.data.default === '開心' && r.data.expressions.some(e => e.name === '開心') && !r.data.expressions.some(e => e.name === 'joy'), '表情改名：預設表情跟著改', JSON.stringify(r.data));
+    r = await j('PUT', `${base}/rename`, { from: 'evil', to: '開心' });
+    ok(r.status === 409, '表情改名：新名稱已經有了時回 409');
+    r = await j('DELETE', `${base}?name=${encodeURIComponent('開心')}`);
+    ok(r.status === 200 && r.data.default === null && !fs.existsSync(path.join(dir, '開心.gif')), '刪除表情：預設表情跟著清掉', JSON.stringify(r.data));
+    // 匯入表情包（ZIP）
+    const pack = zip([{ name: 'sad.png', data: PNG, method: 8 }, { name: 'evil.png', data: JPG }, { name: 'sub/x.png', data: PNG }, { name: 'readme.txt', data: Buffer.from('說明文字說明文字') },
+      { name: '__MACOSX/._sad.png', data: PNG }, { name: 'huge.png', data: Buffer.alloc(6 * 1024 * 1024), method: 8 }]);
+    r = await raw('POST', `${base}/zip?on_conflict=ask`, pack);
+    ok(r.status === 200 && r.data.conflicts.join() === 'evil' && r.data.added.length === 0 && !fs.existsSync(path.join(dir, 'sad.png')), '匯入表情包：有同名時先問，什麼都不寫', JSON.stringify(r.data));
+    r = await raw('POST', `${base}/zip?on_conflict=skip`, pack);
+    const reasons = Object.fromEntries(r.data.skipped.map(s => [s.file, s.reason]));
+    ok(r.data.added.join() === 'sad' && reasons['sub/x.png'] === '在子資料夾裡' && reasons['readme.txt'] === '不是圖片' && reasons['huge.png'] === '超過 5 MB' && reasons.evil && !reasons['__MACOSX/._sad.png'],
+      '匯入表情包：子資料夾、非圖片、太大的略過並說明原因；系統檔不回報', JSON.stringify(r.data.skipped));
+    ok(fs.existsSync(path.join(dir, 'evil.png')) && !fs.existsSync(path.join(dir, 'evil.jpg')), '匯入表情包：選略過時同名的不動');
+    r = await raw('POST', `${base}/zip?on_conflict=replace`, pack);
+    ok(r.data.added.includes('evil') && fs.existsSync(path.join(dir, 'evil.jpg')), '匯入表情包：選取代時換掉同名的');
+    // SillyTavern 的 embarrassment、nervousness → 預設表情格子的 shy、nervous
+    r = await raw('POST', `${base}/zip?on_conflict=replace`, zip([{ name: 'Embarrassment.png', data: PNG }, { name: 'nervousness.png', data: PNG }]));
+    const r2 = await raw('POST', `${base}?name=embarrassment&replace=1`, GIF);
+    ok(r.data.added.join() === 'shy,nervous' && fs.existsSync(path.join(dir, 'nervous.png')) && !fs.existsSync(path.join(dir, 'nervousness.png'))
+      && r2.status === 200 && fs.existsSync(path.join(dir, 'shy.gif')) && !fs.existsSync(path.join(dir, 'embarrassment.gif')),
+      '表情圖：embarrassment、nervousness 自動存成 shy、nervous（匯入表情包與單張新增都一樣）', JSON.stringify(r.data.added));
+    // 提示詞與解析：有表情圖時要求 <expression>，只認清單裡的名稱
+    const prevModel = (await j('GET', '/api/settings')).data.settings.openai?.model;
+    const ch = (await j('POST', `/api/characters/${ec.id}/chats`, {})).data;
+    const curl = `/api/characters/${ec.id}/chats/${ch.id}`;
+    await j('PUT', '/api/settings', { openai: { model: 'expr' } });
+    await gen({ char_id: ec.id, chat_id: ch.id, mode: 'normal', user_message: '怎麼了' });
+    let all = lastReq().messages.map(m => m.content).join('\n');
+    ok(all.includes('<expression>表情名稱</expression>') && /表情名稱只能從這些裡面選一個[^\n]*evil[^\n]*sad/.test(all), '提示詞：有表情圖時要求 <expression> 並列出表情名稱', all.slice(-600));
+    let c = (await j('GET', curl)).data, a = c.messages.at(-1);
+    ok(a.swipe_status?.[0]?.expression === 'sad' && a.swipe_status[0].char.f1 === '低落' && !/<expression/.test(a.content), '解析：表情存進狀態（大小寫、括號不同也認得），標籤拿掉', JSON.stringify(a.swipe_status));
+    await j('PUT', '/api/settings', { openai: { model: 'expr-bad' } });
+    await gen({ char_id: ec.id, chat_id: ch.id, mode: 'normal', user_message: '然後' });
+    all = lastReq().messages.map(m => m.content).join('\n');
+    c = (await j('GET', curl)).data; a = c.messages.at(-1);
+    ok(/\[目前狀態\]\n表情：sad/.test(all) && a.swipe_status?.[0] === null && !/<expression/.test(a.content), '解析：不在清單裡的表情忽略（這個版本沒有狀態，沿用上一份）；目前狀態帶著表情', JSON.stringify([a.swipe_status, all.slice(-200)]));
+    // 只有表情圖、沒有狀態欄位的卡
+    await j('PUT', `/api/characters/${ec.id}`, { data: { ...card.data, extensions: {} } });
+    await j('PUT', '/api/settings', { openai: { model: 'expr' } });
+    await gen({ char_id: ec.id, chat_id: ch.id, mode: 'normal', user_message: '再一次' });
+    all = lastReq().messages.map(m => m.content).join('\n');
+    c = (await j('GET', curl)).data; a = c.messages.at(-1);
+    ok(all.includes('<expression>表情名稱</expression>') && !all.includes('<status>\n[角色]') && a.swipe_status?.[0]?.expression === 'sad', '只有表情圖：只要求 <expression>，照樣存表情', JSON.stringify(a.swipe_status));
+    // 表情改名：對話裡記著舊名稱的狀態也跟著改
+    r = await j('PUT', `${base}/rename`, { from: 'sad', to: 'sadness' });
+    c = (await j('GET', curl)).data;
+    const exprs = c.messages.flatMap(m => (m.swipe_status || []).filter(Boolean).map(s => s.expression)).filter(Boolean);
+    ok(r.status === 200 && exprs.length >= 2 && exprs.every(e => e === 'sadness'), '表情改名：對話裡的狀態也換成新名稱', JSON.stringify(exprs));
+    // 備份會帶上表情圖
+    const bk = (await j('POST', '/api/backups')).data;
+    const bundle = JSON.parse(zlib.gunzipSync(Buffer.from(await (await fetch(B + `/api/backups/${bk.name}/download`)).arrayBuffer())).toString('utf8'));
+    ok(Object.keys(bundle.files).some(k => k.endsWith('/expressions/sadness.png')), '備份：表情圖也包含在內');
+    await j('DELETE', `/api/backups/${bk.name}`);
+    await j('PUT', '/api/settings', { openai: { model: prevModel } });
+    await j('DELETE', `/api/characters/${ec.id}`);
+
+    // 角色卡 V3 的 assets：emotion 放進表情圖（.charx 是 ZIP：card.json＋assets/）
+    const v3 = (name, assets) => ({ spec: 'chara_card_v3', spec_version: '3.0', data: { name, first_mes: '嗨', assets } });
+    const imp = buf => fetch(B + '/api/characters/import', { method: 'POST', body: buf }).then(async r => ({ status: r.status, data: await r.json() }));
+    const exDir = cid => path.join(TD, 'char', fs.readdirSync(path.join(TD, 'char')).find(d => d.endsWith('-' + cid)), 'expressions');
+    const ICON = solidPng(6, 6, [1, 2, 3]);
+    const charx = zip([
+      { name: 'card.json', data: Buffer.from(JSON.stringify(v3('卡X', [
+        { type: 'icon', uri: 'embeded://assets/icon/images/main.png', name: 'main', ext: 'png' },
+        { type: 'emotion', uri: 'embeded://assets/other/image/joy.png', name: 'joy', ext: 'png' },
+        { type: 'emotion', uri: 'embeded://assets/other/image/x.webp', name: 'Embarrassment', ext: 'webp' },
+        { type: 'emotion', uri: `data:image/gif;base64,${GIF.toString('base64')}`, name: '驚訝', ext: 'gif' },
+        { type: 'emotion', uri: 'https://example.com/a.png', name: 'remote', ext: 'png' },
+        { type: 'emotion', uri: 'embeded://assets/missing.png', name: 'lost', ext: 'png' },
+        { type: 'emotion', uri: 'embeded://assets/readme.txt', name: 'notimg', ext: 'png' },
+        { type: 'emotion', uri: 'embeded://assets/other/image/joy.png', name: 'JOY', ext: 'png' },
+        { type: 'emotion', uri: 'ccdefault:', name: 'default', ext: 'png' },
+      ]))), method: 8 },
+      { name: 'assets/icon/images/main.png', data: ICON },
+      { name: 'assets/other/image/joy.png', data: PNG, method: 8 },
+      { name: 'assets/other/image/x.webp', data: WEBP },
+      { name: 'assets/readme.txt', data: Buffer.from('說明文字說明文字') },
+    ]);
+    let ir = await imp(charx);
+    const why = Object.fromEntries((ir.data.expressions?.skipped || []).map(s => [s.file, s.reason]));
+    ok(ir.status === 200 && ir.data.name === '卡X' && ir.data.expressions.added.join() === 'joy,shy,驚訝'
+      && /網址/.test(why.remote) && /找不到/.test(why.lost) && why.notimg === '不是圖片' && /同名/.test(why.JOY) && !why.default,
+      '匯入 .charx：emotion 圖片放進表情圖（embeded://、data:；別名照樣換成 shy），網址、找不到、不是圖片、同名的略過並說明', JSON.stringify(ir.data));
+    const xc = (await j('GET', `/api/characters/${ir.data.id}`)).data;
+    ok(xc.has_cover && fs.readFileSync(path.join(path.dirname(exDir(ir.data.id)), 'cover.png')).equals(ICON) && xc.expressions.map(e => e.name).sort().join() === ['joy', 'shy', '驚訝'].sort().join()
+      && !('assets' in xc.data), '匯入 .charx：icon（main）當封面；卡片資料不留 assets', JSON.stringify(xc.expressions));
+    await j('DELETE', `/api/characters/${ir.data.id}`);
+    // PNG／JSON 的 V3 卡：data: 的 emotion 一樣匯入，封面照舊用 PNG 本身
+    const pcard = v3('卡P', [{ type: 'emotion', uri: `data:image/png;base64,${PNG.toString('base64')}`, name: 'sad', ext: 'png' }]);
+    const pbuf = require(path.join(PROJ, 'lib/png.js')).embedCard(ICON, { spec: 'chara_card_v2', data: { name: '卡P' } }, pcard);
+    ir = await imp(pbuf);
+    ok(ir.status === 200 && ir.data.expressions.added.join() === 'sad' && fs.existsSync(path.join(exDir(ir.data.id), 'sad.png')), '匯入 PNG 的 V3 卡：assets 裡的表情圖一起匯入');
+    await j('DELETE', `/api/characters/${ir.data.id}`);
+    ir = await imp(Buffer.from(JSON.stringify(v3('卡J', []))));
+    ok(ir.status === 200 && ir.data.expressions.added.length === 0 && ir.data.expressions.skipped.length === 0, '沒有 assets 的卡照常匯入');
+    await j('DELETE', `/api/characters/${ir.data.id}`);
+    ir = await imp(zip([{ name: 'assets/a.png', data: PNG }]));
+    ok(ir.status === 400 && /card\.json/.test(ir.data.error), '匯入 .charx：沒有 card.json 時回 400', JSON.stringify(ir.data));
+  }
+
+  // ===== 狀態欄：大世界（欄位在世界卡上，每個角色各自一份） =====
+  {
+    const st = require(path.join(PROJ, 'lib/status.js'));
+    const { solidPng } = require(path.join(PROJ, 'lib/png.js'));
+    const PNG = solidPng(4, 4, [10, 20, 30]);
+    const prevModel = (await j('GET', '/api/settings')).data.settings.openai?.model;
+    const ca = (await j('POST', '/api/characters', { data: { name: '狀甲', description: 'A' } })).data;
+    const cb = (await j('POST', '/api/characters', { data: { name: '狀乙', description: 'B' } })).data;
+    for (const [cid, names] of [[ca.id, ['joy', 'shy']], [cb.id, ['sad']]])
+      for (const n of names) await fetch(B + `/api/characters/${cid}/expressions?name=${n}`, { method: 'POST', body: PNG });
+    const status = {
+      char_fields: [{ key: 'f1', name: '心情', type: 'text', hint: '{{char}} 此刻的情緒', initial: '平靜' }],
+      user_fields: [{ key: 'u1', name: 'HP', type: 'number', max: 100, hint: '', initial: '100' }],
+    };
+    const mk = async turn_mode => (await j('POST', '/api/bigworlds', { data: { name: '狀態鎮', turn_mode, opening: [{ speaker: 'narrator', content: '故事開始' }], members: [{ id: ca.id }, { id: cb.id }], status } })).data.id;
+    const wid = await mk('narrator'), wkey = 'world-' + wid;
+    let w = (await j('GET', `/api/bigworlds/${wid}`)).data;
+    ok(w.status?.char_fields?.[0]?.name === '心情' && w.members.find(m => m.id === ca.id)?.expressions?.length === 2, '世界卡存著狀態欄位；成員帶著各自的表情圖', JSON.stringify([w.status, w.members.map(m => m.expressions)]));
+    // 開場白：每個成員各自一份初始值
+    let ch = (await j('POST', `/api/characters/${wkey}/chats`, {})).data;
+    const curl = `/api/characters/${wkey}/chats/${ch.id}`;
+    let c = (await j('GET', curl)).data;
+    let s0 = c.messages.at(-1).swipe_status?.[0];
+    ok(s0?.chars?.[ca.id]?.f1 === '平靜' && s0?.chars?.[cb.id]?.f1 === '平靜' && s0.user?.u1 === '100', '大世界開場白：每個角色各自寫入初始值', JSON.stringify(s0));
+    // 旁白統一：一次寫好幾個角色，用角色名當分區
+    await j('PUT', '/api/settings', { openai: { model: 'wstatus-narr' } });
+    await gen({ char_id: wkey, chat_id: ch.id, mode: 'normal', user_message: '大家好' });
+    let all = lastReq().messages.map(m => m.content).join('\n');
+    ok(/\[狀甲\]\n心情：…/.test(all) && /- 狀甲：joy、shy/.test(all) && /- 狀乙：sad/.test(all) && /\[目前狀態\]\n\[狀甲\]\n表情：（未定）\n心情：平靜/.test(all) && all.includes('此刻的情緒') && !all.includes('{{char}}'),
+      '提示詞（旁白統一）：角色名當分區、列出每個角色自己的表情與目前狀態', all.slice(-900));
+    c = (await j('GET', curl)).data;
+    let a = c.messages.at(-1), s = a.swipe_status?.[0];
+    ok(s?.chars?.[ca.id]?.f1 === '開心' && s.chars[cb.id]?.f1 === '難過' && s.user?.u1 === '50' && s.exprs?.[ca.id] === 'joy' && s.exprs?.[cb.id] === 'sad' && s.focus === cb.id && !/<status|<expression/.test(a.content),
+      '解析（旁白統一）：每個角色的狀態與表情各自存下，面板顯示表情區塊最後一個角色', JSON.stringify(s));
+    // 輪流發言：角色只收自己的分區＋玩家
+    const wid2 = await mk('turns'), wkey2 = 'world-' + wid2;
+    const ch2 = (await j('POST', `/api/characters/${wkey2}/chats`, {})).data;
+    const curl2 = `/api/characters/${wkey2}/chats/${ch2.id}`;
+    await j('PUT', '/api/settings', { openai: { model: 'wstatus-narr' } });
+    await gen({ char_id: wkey2, chat_id: ch2.id, mode: 'normal', user_message: '旁白請說', speaker: 'narrator' });
+    c = (await j('GET', curl2)).data; a = c.messages.at(-1); s = a.swipe_status?.[0];
+    ok(a.speaker === 'narrator' && s?.exprs?.[ca.id] === 'joy' && s?.exprs?.[cb.id] === 'sad' && a.content.trim() === '兩人相視一笑。',
+      '輪流發言的旁白：表情的「角色名：表情」不會被當成替別人寫的台詞截掉', JSON.stringify([a.content, s]));
+    await j('PUT', '/api/settings', { openai: { model: 'wstatus-char' } });
+    await gen({ char_id: wkey2, chat_id: ch2.id, mode: 'normal', user_message: '狀甲你呢', speaker: ca.id });
+    all = lastReq().messages.map(m => m.content).join('\n');
+    const tailText = lastReq().messages.slice(-3).map(m => m.content).join('\n');
+    ok(/\[目前狀態\]\n表情：joy\n\[角色\]\n心情：開心\n\[玩家\]\nHP：50/.test(all) && !/難過/.test(tailText) && /表情名稱只能從這些裡面選一個[^\n]*joy、shy/.test(all),
+      '提示詞（角色發言）：只看到自己的目前狀態、表情與玩家狀態', tailText.slice(-700));
+    c = (await j('GET', curl2)).data; a = c.messages.at(-1); s = a.swipe_status?.[0];
+    let cur = st.worldCurrentStatus(c.messages);
+    ok(a.speaker === ca.id && s?.chars?.[ca.id]?.f1 === '害羞' && !s.chars[cb.id] && s.user?.u1 === '70' && s.exprs?.[ca.id] === 'shy' && cur.chars[cb.id]?.f1 === '難過',
+      '解析（角色發言）：只收自己的分區與玩家，寫到別人的略過；別人的狀態維持原本的', JSON.stringify([s, cur.chars]));
+    // 手動編輯：角色欄位寫進那個角色目前狀態所在的訊息，玩家欄位寫進玩家的
+    let r = await j('PUT', `${curl2}/status`, { member: cb.id, char: { f1: '手改' }, user: { u1: '33' }, base_ver: c.msg_ver });
+    cur = st.worldCurrentStatus(r.data.messages);
+    ok(r.status === 200 && cur.chars[cb.id]?.f1 === '手改' && cur.chars[ca.id]?.f1 === '害羞' && cur.user?.u1 === '33' && cur.at[cb.id] === r.data.messages.length - 3,
+      '大世界手動編輯：寫到該角色與玩家各自目前狀態所在的訊息', JSON.stringify(cur));
+    r = await j('PUT', `${curl2}/status`, { member: 'nobody', char: { f1: 'x' } });
+    ok(r.status === 400, '大世界手動編輯：不在世界裡的角色回 400', r.status);
+    // 表情改名：大世界對話裡記著這個角色的表情也跟著改
+    await j('PUT', `/api/characters/${cb.id}/expressions/rename`, { from: 'sad', to: 'sadness' });
+    c = (await j('GET', curl)).data;
+    ok(st.worldCurrentStatus(c.messages).exprs[cb.id] === 'sadness', '表情改名：大世界對話裡的表情也換成新名稱');
+    // 沒有欄位、沒有表情的世界：不加狀態欄說明
+    ok(st.worldStatusNote({ char_fields: [], user_fields: [] }, null, [{ id: 'x', name: 'X', exprs: [] }]) === '', '沒有欄位也沒有表情的世界：不加狀態欄說明');
+    // 解析的細節：旁白沒有分區標題的角色欄位略過、不認得的角色略過
+    const def = st.cleanStatusDef(status);
+    const p = st.parseWorldStatusBody('心情：沒分區\n[路人]\n心情：x\n[狀甲]\n心情：好\nHP：20', def, { members: [{ id: 'a', name: '狀甲' }] });
+    ok(p && !p.chars.x && p.chars.a?.f1 === '好' && p.user.u1 === '20' && Object.keys(p.chars).length === 1, '解析（旁白）：沒有分區的角色欄位、不認得的角色略過；玩家欄位寫在角色分區裡也認得', JSON.stringify(p));
+    await j('PUT', '/api/settings', { openai: { model: prevModel } });
+    await j('DELETE', `/api/bigworlds/${wid}`); await j('DELETE', `/api/bigworlds/${wid2}`);
+    await j('DELETE', `/api/characters/${ca.id}`); await j('DELETE', `/api/characters/${cb.id}`);
+  }
+
+  // ===== 匯出角色卡：直接存到下載資料夾（測試時是暫存資料夾） =====
+  {
+    const { safeFileName, downloadsDir } = require(path.join(PROJ, 'lib/util.js'));
+    ok(safeFileName('a/b:c*?"<>|.') === 'a_b_c______' && safeFileName('  ..  ') === '未命名', '匯出檔名：拿掉 Windows 不能用的字元與前後的句點', safeFileName('a/b:c*?"<>|.'));
+    ok(downloadsDir() === path.resolve(process.env.TAVERN_DOWNLOAD_DIR), '匯出：測試時寫到暫存的下載資料夾');
+    const ec = (await j('POST', '/api/characters', { data: { name: '匯出:測試', first_mes: '嗨' } })).data;
+    let r1 = await j('POST', '/api/export-save', { kind: 'char', id: ec.id, format: 'json' });
+    const r2 = await j('POST', '/api/export-save', { kind: 'char', id: ec.id, format: 'json' });
+    const inDir = p => typeof p === 'string' && path.dirname(p) === path.resolve(process.env.TAVERN_DOWNLOAD_DIR);
+    ok(r1.status === 200 && inDir(r1.data.path) && path.basename(r1.data.path).startsWith('匯出_測試-') && r1.data.path.endsWith('.json')
+      && JSON.parse(fs.readFileSync(r1.data.path, 'utf8')).data.name === '匯出:測試', '匯出 JSON：存到下載資料夾並回傳完整路徑', JSON.stringify(r1.data));
+    ok(r2.status === 200 && r2.data.path !== r1.data.path && /\(\d+\)\.json$/.test(r2.data.path) && fs.existsSync(r1.data.path), '匯出：同名時加 (1)，不會蓋掉前一個檔案', JSON.stringify(r2.data));
+    r1 = await j('POST', '/api/export-save', { kind: 'char', id: ec.id, format: 'png' });
+    const { extractCard } = require(path.join(PROJ, 'lib/png.js'));
+    ok(r1.status === 200 && r1.data.path.endsWith('.png') && extractCard(fs.readFileSync(r1.data.path))?.data?.name === '匯出:測試', '匯出 PNG：存到下載資料夾，圖片裡帶著角色資料', JSON.stringify(r1.data));
+    const dl = await fetch(B + `/api/characters/${ec.id}/export?format=json`);
+    ok(dl.status === 200 && /filename\*=UTF-8''/.test(dl.headers.get('content-disposition') || '') && (await dl.json()).data.name === '匯出:測試', '瀏覽器下載的匯出照舊可以用');
+    await j('DELETE', `/api/characters/${ec.id}`);
+    // 其他匯出：世界書、備份、全部資料（下載和直接存檔是同一份內容與檔名）
+    const wb = (await j('POST', '/api/worlds', { name: '匯出世界書', entries: [{ keys: ['k'], content: 'c' }] })).data;
+    let r = await j('POST', '/api/export-save', { kind: 'world', id: wb.id });
+    ok(r.status === 200 && inDir(r.data.path) && path.basename(r.data.path).startsWith('匯出世界書') && JSON.parse(fs.readFileSync(r.data.path, 'utf8')).name === '匯出世界書',
+      '匯出世界書：直接存到下載資料夾', JSON.stringify(r.data));
+    const wdl = await fetch(B + `/api/worlds/${wb.id}/export`);
+    ok(wdl.status === 200 && (await wdl.json()).name === '匯出世界書', '世界書的瀏覽器下載照舊可以用');
+    await j('DELETE', `/api/worlds/${wb.id}`);
+    const bk = (await j('POST', '/api/backups')).data;
+    r = await j('POST', '/api/export-save', { kind: 'backup', id: bk.name });
+    ok(r.status === 200 && inDir(r.data.path) && r.data.path.endsWith('.tavern') && fs.statSync(r.data.path).size > 0, '下載備份：直接存到下載資料夾', JSON.stringify(r.data));
+    r = await j('POST', '/api/export-save', { kind: 'all' });
+    ok(r.status === 200 && inDir(r.data.path) && path.basename(r.data.path).startsWith('AI酒館-全部資料-') && r.data.path.endsWith('.tavern'), '匯出全部資料：直接存到下載資料夾', JSON.stringify(r.data));
+    await j('DELETE', `/api/backups/${bk.name}`);
+    // 不認得的種類、奇怪的 ID：拒絕，不會寫到別的地方
+    const bad = await Promise.all([{ kind: 'nope' }, { kind: 'toString' }, { kind: 'world', id: '../../x' }, { kind: 'backup', id: '../secret.tavern' }].map(b => j('POST', '/api/export-save', b)));
+    ok(bad.every(x => x.status === 400), '直接存檔：不認得的種類、不合法的 ID 回 400', JSON.stringify(bad.map(x => x.status)));
+  }
+
+  // ===== 前端：狀態欄面板外框、用到的圖示都存在 =====
+  {
+    const page = (await j('GET', '/')).data;
+    const panel = String(page).match(/<aside id="statusPanel"[\s\S]*?<\/aside>/)?.[0] || '';
+    ok(/id="btnStatusPanel"/.test(page) && /id="btnSpExpand"/.test(page) && /id="btnSpCollapse"/.test(page) && /id="spMask"/.test(page), '對話頁有狀態欄的開關按鈕、右側的展開／收合按鈕與手機版遮罩');
+    ok(/html\[data-motion="off"\][^{]*#statusPanel[^{]*\{[^}]*transition:\s*none/.test(fs.readFileSync(path.join(PROJ, 'public/style.css'), 'utf8')), '狀態欄的滑動動畫跟著「動畫」設定關閉');
+    const iImg = panel.indexOf('id="spImg"'), iChar = panel.indexOf('id="spChar"'), iUser = panel.indexOf('id="spUser"');
+    ok(iImg > 0 && iImg < iChar && iChar < iUser, '狀態欄由上到下：圖片 → 角色狀態 → 使用者狀態', JSON.stringify({ iImg, iChar, iUser }));
+    // 面板在頁首下方（#chatBody 裡），不佔頁首的寬度
+    const pg = String(page), iHeadEnd = pg.indexOf('</header>', pg.indexOf('id="chatHead"'));
+    ok(iHeadEnd > 0 && pg.indexOf('id="chatBody"') > iHeadEnd && pg.indexOf('id="statusPanel"') > pg.indexOf('id="chatBody"'), '狀態欄面板在頁首下方，不影響頁首');
+    const css = fs.readFileSync(path.join(PROJ, 'public/style.css'), 'utf8');
+    ok(/\.sp-char\s*\{[^}]*flex:\s*1 1 0/.test(css) && /\.sp-user\s*\{[^}]*flex:\s*1 1 0/.test(css) && /\.sp-blank\s*\{[^}]*visibility:\s*hidden/.test(css),
+      '角色、玩家狀態平分空間，沒有欄位的一區留著空位（玩家狀態從固定位置開始）');
+    // 圖示名稱打錯時畫面上只會是空白：掃過 HTML 與前端程式，確認每個名稱都在 icons.js 裡
+    const ICONS = new Function(fs.readFileSync(path.join(PROJ, 'public/icons.js'), 'utf8') + '; return ICONS;')();
+    const used = new Set();
+    for (const m of String(page).matchAll(/data-icon="([\w-]+)"/g)) used.add(m[1]);
+    for (const f of fs.readdirSync(path.join(PROJ, 'public/js'))) {
+      const src = fs.readFileSync(path.join(PROJ, 'public/js', f), 'utf8');
+      for (const m of src.matchAll(/\b(?:icon|ic)\(\s*'([\w-]+)'/g)) used.add(m[1]);
+    }
+    const missing = [...used].filter(n => !ICONS[n]);
+    ok(used.has('panel-right') && !missing.length, '前端用到的圖示都在 icons.js 裡', missing.join(', '));
+  }
+
+  // ===== 程式碼審查後的修正 =====
+  {
+    // 狀態標籤：<status-bar> 這種卡片自訂的 HTML、正文裡的「<expression 很怪」不能被當成標籤吃掉
+    const { extractTags } = require(path.join(PROJ, 'lib/status.js'));
+    let t = extractTags('<status-bar>心情：好</status-bar>\n後面還有很多正文');
+    ok(t.text === '<status-bar>心情：好</status-bar>\n後面還有很多正文' && t.status === null, '狀態標籤：<status-bar> 不算 <status>，原樣保留', JSON.stringify(t));
+    t = extractTags('角色說：「我的 <expression 很怪」然後繼續說下去。');
+    ok(t.text === '角色說：「我的 <expression 很怪」然後繼續說下去。', '狀態標籤：正文裡沒寫完的「<expression 很怪」不會截掉後面的內容', JSON.stringify(t));
+    t = extractTags('正文。\n<status>\n[角色]\n心情：好');
+    ok(t.text === '正文。', '狀態標籤：回覆被截斷、<status> 沒有結尾時照樣拿掉', JSON.stringify(t));
+    t = extractTags('正文。\n<expres');
+    ok(t.text === '正文。\n<expres', '狀態標籤：只有半截名稱（<expres）的不算標籤', JSON.stringify(t));
+    t = extractTags('正文。\n<expression');
+    ok(t.text === '正文。', '狀態標籤：結尾是完整名稱、標籤還沒寫完（<expression）時拿掉', JSON.stringify(t));
+    t = extractTags('正文。<status class="x">[角色]\n心情：好</status>');
+    ok(t.text === '正文。' && t.status.includes('心情：好'), '狀態標籤：<status> 帶屬性時照樣認得', JSON.stringify(t));
+    // 前端串流時的隱藏和伺服器用同一套規則
+    const core = fs.readFileSync(path.join(PROJ, 'public/js/core.js'), 'utf8'), stSrc = fs.readFileSync(path.join(PROJ, 'lib/status.js'), 'utf8');
+    ok(core.includes(String.raw`<(status|expression)(?:(?=[\s>/])[^<>]*>[\s\S]*|[\w\s="'-]*)$`) && stSrc.includes(String.raw`<(status|expression)(?:(?=[\s>/])[^<>]*>[\s\S]*|[\w\s="'-]*)$`)
+      && /usesStatus\(state\.char\) \? hideStatusTags/.test(fs.readFileSync(path.join(PROJ, 'public/js/chat.js'), 'utf8')),
+    '前端：串流時隱藏標籤的規則和伺服器相同，卡片沒有狀態欄時不隱藏');
+
+    // 導演：名字超過 20 字的角色不能被略過
+    const { parsePlan, NARRATOR } = require(path.join(PROJ, 'lib/turns.js'));
+    const longMembers = [{ id: 'sera', card: { name: 'Seraphina the Forest Guardian' } }, { id: 'b', card: { name: '艾迪娜' } }];
+    let pp = parsePlan('在場：Seraphina the Forest Guardian、艾迪娜\n重點：x\n1. Seraphina the Forest Guardian：守護森林\n2. 艾迪娜：吐槽', longMembers, 2);
+    ok(pp.steps.map(s => s.speaker).join() === 'sera,b', '導演：名字超過 20 字的角色照樣安排發言', JSON.stringify(pp.steps));
+    pp = parsePlan('在場：Seraphina the Forest Guardian\n重點：x\n1. **Seraphina the Forest Guardian**：說話', [longMembers[0]], 2);
+    ok(pp.steps.length === 1 && pp.steps[0].speaker === 'sera' && pp.steps[0].speaker !== NARRATOR, '導演：只有長名字角色的世界不會變成只剩旁白', JSON.stringify(pp.steps));
+
+    // API 的輸入檢查
+    const c = (await j('POST', '/api/characters', { data: { name: '審查測試', first_mes: '你好' } })).data;
+    const ch = (await j('POST', `/api/characters/${c.id}/chats`, {})).data;
+    const ver = (await j('GET', `/api/characters/${c.id}/chats/${ch.id}`)).data.msg_ver;
+    r = await j('PUT', `/api/characters/${c.id}/chats/${ch.id}`, { messages: [null, 'x', 5], base_ver: ver });
+    ok(r.status === 400, '存對話：訊息格式不對時回 400，不存進去', r.status);
+    r = await j('PUT', `/api/characters/${c.id}/chats/${ch.id}`, { messages: 'abc' });
+    ok(r.status === 400, '存對話：messages 不是陣列時回 400', r.status);
+    r = await j('POST', '/api/generate', { char_id: c.id, chat_id: ch.id, mode: 'normal', user_message: 123 });
+    ok(r.status === 400 && /user_message/.test(r.data.error), '生成：user_message 不是文字時回 400（不是 500）', JSON.stringify(r));
+    r = await j('POST', '/api/generate', { char_id: c.id, chat_id: ch.id, mode: 'xyz' });
+    ok(r.status === 400, '生成：不認得的 mode 回 400', r.status);
+    // 檔案裡已經有壞掉的訊息（手動改過、匯入的備份）：讀取時略過，照樣可以預覽提示詞
+    {
+      const store = require(path.join(PROJ, 'lib/storage.js'));
+      const raw = store.getChat(c.id, ch.id);
+      store.saveChat(c.id, { ...raw, messages: [...raw.messages, null, 'x', { role: 'user', content: 5 }] });
+      const got = (await j('GET', `/api/characters/${c.id}/chats/${ch.id}`)).data;
+      ok(got.messages.every(m => m && typeof m.content === 'string') && got.messages.some(m => m.content === '5'), '讀對話：格式不對的訊息略過，內容不是文字的轉成文字', JSON.stringify(got.messages));
+      r = await j('POST', '/api/prompt-preview', { char_id: c.id, chat_id: ch.id });
+      ok(r.status === 200, '讀對話：有壞掉的訊息時照樣可以預覽提示詞', JSON.stringify(r.data).slice(0, 200));
+    }
+    await j('DELETE', `/api/characters/${c.id}`);
+    // 大世界：PUT 沒帶 data 時不能把世界重設成空白
+    const w = (await j('POST', '/api/bigworlds', { data: { name: '審查測試世界', setting: '設定內容' } })).data;
+    r = await j('PUT', `/api/bigworlds/${w.id}`, { remove_cover: true });
+    const w2 = (await j('GET', `/api/bigworlds/${w.id}`)).data;
+    ok(r.status === 400 && w2.name === '審查測試世界' && w2.setting === '設定內容', '大世界：PUT 沒帶 data 時回 400，世界不會被重設', JSON.stringify({ s: r.status, n: w2.name }));
+    r = await j('POST', '/api/bigworlds', { data: 'abc' });
+    ok(r.status === 400, '大世界：新增時 data 格式不對回 400', r.status);
+    await j('DELETE', `/api/bigworlds/${w.id}`);
+
+    // 設定檔：讀取失敗（例如被防毒軟體暫時鎖住）不能放進快取，不然下一次存檔會把設定檔清空
+    {
+      const os = require('os'), { execFileSync } = require('child_process');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tavern-settings-'));
+      const script = `
+        const fs = require('fs'), path = require('path');
+        const store = require(${JSON.stringify(path.join(PROJ, 'lib/storage.js'))});
+        const SF = path.join(process.env.TAVERN_DATA_DIR, 'settings.json');
+        const good = JSON.stringify({ user_name: 'Keep', profiles: [{ id: 'p1', name: '留著' }] });
+        const t = new Date(Date.now() - 60000);
+        fs.writeFileSync(SF, 'x'.repeat(good.length)); fs.utimesSync(SF, t, t);
+        const first = store.getSettings().user_name;
+        fs.writeFileSync(SF, good); fs.utimesSync(SF, t, t); // 同樣的大小與修改時間
+        const second = store.getSettings();
+        let blocked = false;
+        fs.writeFileSync(SF, '{壞掉'); try { store.saveSettings({ temperature: 0.5 }); } catch (e) { blocked = e.status === 409; }
+        console.log(JSON.stringify({ first, second: second.user_name, profiles: (second.profiles || []).length, blocked }));`;
+      let out = {};
+      try {
+        out = JSON.parse(execFileSync(process.execPath, ['-e', script], { cwd: PROJ, encoding: 'utf8',
+          env: { ...process.env, TAVERN_DATA_DIR: path.join(dir, 'data'), TAVERN_CONFIG: path.join(dir, 'config.json'), TAVERN_WINDOW_FILE: path.join(dir, 'window.json') } }).trim().split('\n').pop());
+      } catch (e) { out = { error: String(e.stdout || e.message).slice(-300) }; }
+      ok(out.second === 'Keep' && out.profiles === 1 && out.blocked, '設定檔：讀取失敗不放進快取（檔案恢復後讀得到）；損毀時拒絕存檔', JSON.stringify(out));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    // 區網模式的存取碼（lib/lan-auth.js）：用一個小伺服器模擬「不是這台電腦」發出的請求
+    {
+      const os = require('os'), http = require('http');
+      const { createLanAuth, COOKIE } = require(path.join(PROJ, 'lib/lan-auth.js'));
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tavern-lan-'));
+      const codeFile = path.join(dir, 'lan-code.txt');
+      const auto = createLanAuth({ file: codeFile });
+      const code = auto.code();
+      ok(/^\d{6}$/.test(code) && fs.readFileSync(codeFile, 'utf8').trim() === code && createLanAuth({ file: codeFile }).code() === code,
+        '區網：沒有指定存取碼時產生 6 位數字並存起來，下次沿用', code);
+      ok(createLanAuth({ file: codeFile, fixed: ' 2468 ' }).code() === '2468', '區網：環境變數指定的存取碼優先');
+      let loop = false;
+      const lan = createLanAuth({ file: codeFile, fixed: '135790' });
+      const srv = http.createServer(async (req, res) => {
+        const pathname = new URL(req.url, 'http://x').pathname;
+        if (await lan.handle(req, res, pathname, loop)) return;
+        res.end('ok');
+      });
+      await new Promise(rs => srv.listen(0, '127.0.0.1', rs));
+      const base = `http://127.0.0.1:${srv.address().port}`;
+      const go = (p, opt = {}) => fetch(base + p, { redirect: 'manual', ...opt });
+      const login = codeIn => go('/lan-login', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'code=' + encodeURIComponent(codeIn) });
+      let rr = await go('/');
+      const html = await rr.text();
+      ok(rr.status === 401 && html.includes('存取碼') && /form-action 'self'/.test(rr.headers.get('content-security-policy') || ''), '區網：沒有存取碼時顯示輸入存取碼的頁面', rr.status);
+      rr = await go('/api/settings');
+      ok(rr.status === 401 && (await rr.json()).error.includes('存取碼'), '區網：沒有存取碼時 API 回 401', rr.status);
+      rr = await login('000000');
+      ok(rr.status === 401 && !rr.headers.get('set-cookie'), '區網：存取碼不對時不發 cookie', rr.status);
+      rr = await login('135790');
+      const cookie = (rr.headers.get('set-cookie') || '').split(';')[0];
+      ok(rr.status === 303 && cookie.startsWith(COOKIE + '=') && /HttpOnly/.test(rr.headers.get('set-cookie')) && /SameSite=Strict/.test(rr.headers.get('set-cookie')), '區網：存取碼正確時發 cookie 並回到首頁', rr.status);
+      rr = await go('/api/settings', { headers: { Cookie: cookie } });
+      ok(rr.status === 200 && (await rr.text()) === 'ok', '區網：有 cookie 之後可以正常使用', rr.status);
+      rr = await go('/api/settings', { headers: { Cookie: COOKIE + '=' + 'a'.repeat(64) } });
+      ok(rr.status === 401, '區網：偽造的 cookie 不算數', rr.status);
+      ok(await createLanAuth({ file: codeFile, fixed: '999999' }).handle({ headers: { cookie }, method: 'GET', socket: {} }, { writeHead() {}, end() {} }, '/api/x', false) === true,
+        '區網：存取碼換了，舊的 cookie 失效');
+      loop = true;
+      rr = await go('/api/settings');
+      ok(rr.status === 200, '區網：這台電腦自己不用存取碼', rr.status);
+      loop = false;
+      for (let i = 0; i < 5; i++) await login('111111');
+      rr = await login('135790');
+      ok(rr.status === 429, '區網：連續錯 5 次後暫時鎖住（正確的存取碼也要等）', rr.status);
+      await new Promise(rs => srv.close(rs));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    ok(fs.readFileSync(path.join(PROJ, 'server.js'), 'utf8').includes("if (lanAuth && await lanAuth.handle(req, res, pathname, isLoopback(req))) return;"), '伺服器：開放區網時每個請求都先檢查存取碼');
+
+    // ===== 可有可無的修正 =====
+    // 世界書沒有名稱（手動改過的檔案）：清單照樣列得出來
+    {
+      const wdir = path.join(TD, 'worlds');
+      fs.writeFileSync(path.join(wdir, 'noname-test.json'), JSON.stringify({ entries: [{ keys: ['a'], content: 'x' }] }));
+      r = await j('GET', '/api/worlds');
+      ok(r.status === 200 && r.data.some(w => w.id === 'noname-test' && w.name === 'noname-test' && w.count === 1), '世界書沒有名稱時：清單用檔名代替，不會整份出錯', JSON.stringify(r).slice(0, 200));
+      fs.unlinkSync(path.join(wdir, 'noname-test.json'));
+    }
+    // 損毀的對話檔：提示一次（不會從清單無聲消失）
+    {
+      const bc = (await j('POST', '/api/characters', { data: { name: '損毀對話測試' } })).data;
+      const bch = (await j('POST', `/api/characters/${bc.id}/chats`, {})).data;
+      // 找到這段對話的檔案：在角色資料夾的 chats/ 裡
+      const find = d => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) { const f = find(p); if (f) return f; } else if (e.name === bch.id + '.json') return p; } return null; };
+      const f = find(path.join(TD, 'char'));
+      fs.writeFileSync(f, '{壞掉的 JSON');
+      r = await j('GET', '/api/broken-chats');
+      ok(r.status === 200 && r.data.files.some(x => x.endsWith(bch.id + '.json')), '損毀的對話檔：/api/broken-chats 列得出來', JSON.stringify(r.data));
+      ok(/api\/broken-chats/.test(fs.readFileSync(path.join(PROJ, 'public/js/main.js'), 'utf8')), '前端啟動時提示損毀的對話檔');
+      fs.unlinkSync(f);
+      r = await j('GET', '/api/broken-chats');
+      ok(!r.data.files.some(x => x.endsWith(bch.id + '.json')), '損毀的對話檔刪掉之後不再提示');
+      await j('DELETE', `/api/characters/${bc.id}`);
+    }
+    // 還原中斷（換上新資料的途中當機）：啟動時先把缺少的資料夾從 .restore-old-* 搬回來，再清暫存資料夾
+    {
+      const os = require('os'), { execFileSync } = require('child_process');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tavern-restore-'));
+      const data = path.join(dir, 'data');
+      fs.mkdirSync(path.join(data, '.restore-old-123', 'char', 'a-1'), { recursive: true });
+      fs.writeFileSync(path.join(data, '.restore-old-123', 'char', 'a-1', 'card.json'), '{"data":{"name":"A"}}');
+      fs.mkdirSync(path.join(data, '.restore-old-123', 'worlds'), { recursive: true });
+      fs.writeFileSync(path.join(data, '.restore-old-123', 'worlds', 'old.json'), '{}');
+      fs.mkdirSync(path.join(data, 'worlds'), { recursive: true }); // worlds 已經換上新的
+      fs.writeFileSync(path.join(data, 'worlds', 'new.json'), '{}');
+      fs.mkdirSync(path.join(data, '.restore-new-123'), { recursive: true });
+      let out = '';
+      try {
+        out = execFileSync(process.execPath, ['-e', `require(${JSON.stringify(path.join(PROJ, 'lib/backup.js'))}).startupBackup(0); console.log('DONE')`], { cwd: PROJ, encoding: 'utf8',
+          env: { ...process.env, TAVERN_DATA_DIR: data, TAVERN_CONFIG: path.join(dir, 'config.json'), TAVERN_WINDOW_FILE: path.join(dir, 'window.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) { out = String(e.stdout || '') + String(e.stderr || e.message); }
+      ok(out.includes('DONE') && fs.existsSync(path.join(data, 'char', 'a-1', 'card.json')) && fs.existsSync(path.join(data, 'worlds', 'new.json'))
+        && !fs.existsSync(path.join(data, 'worlds', 'old.json')) && !fs.readdirSync(data).some(n => n.startsWith('.restore-')),
+      '還原中斷：缺少的資料夾搬回原位、已經換上的不動，暫存資料夾清掉', out.slice(-300));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    // 自動備份：最新一份的雜湊記在索引裡，資料沒變時不必解壓縮舊備份就能略過
+    {
+      const os = require('os'), { execFileSync } = require('child_process');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tavern-bk-'));
+      const data = path.join(dir, 'data');
+      fs.mkdirSync(path.join(data, 'char', 'a-1'), { recursive: true });
+      fs.writeFileSync(path.join(data, 'char', 'a-1', 'card.json'), '{"data":{"name":"A"}}');
+      fs.writeFileSync(path.join(data, 'char', 'a-1', 'cover.png'), Buffer.from('89504e470d0a1a0a0000', 'hex'));
+      const script = `
+        const fs = require('fs'), path = require('path'), zlib = require('zlib');
+        const bk = require(${JSON.stringify(path.join(PROJ, 'lib/backup.js'))});
+        const a = bk.createBackup();
+        const idx = JSON.parse(fs.readFileSync(path.join(bk.BACKUP_DIR, 'index.json'), 'utf8'));
+        // 讓解壓縮會失敗：如果還去讀舊備份比對，就會當成「舊備份壞掉」而建立新的一份
+        const orig = zlib.gunzipSync; let unzipped = 0; zlib.gunzipSync = (...x) => { unzipped++; return orig(...x); };
+        const b = bk.createBackup();
+        fs.writeFileSync(path.join(process.env.TAVERN_DATA_DIR, 'char', 'a-1', 'card.json'), '{"data":{"name":"B"}}');
+        const c = bk.createBackup();
+        bk.pruneBackups(Infinity);
+        const blobs = fs.readdirSync(path.join(bk.BACKUP_DIR, 'blobs')).length;
+        console.log(JSON.stringify({ a: !!a, latest: idx._latest_auto && idx._latest_auto.name === a, b, unzipped, c: !!c, blobs }));`;
+      let out = {};
+      try {
+        out = JSON.parse(execFileSync(process.execPath, ['-e', script], { cwd: PROJ, encoding: 'utf8',
+          env: { ...process.env, TAVERN_DATA_DIR: data, TAVERN_CONFIG: path.join(dir, 'config.json'), TAVERN_WINDOW_FILE: path.join(dir, 'window.json') } }).trim().split('\n').pop());
+      } catch (e) { out = { error: String(e.stdout || e.message).slice(-300) }; }
+      ok(out.a && out.latest && out.b === null && out.unzipped === 0 && out.c && out.blobs === 1,
+        '自動備份：最新一份的雜湊記在索引裡（沒變時不解壓縮舊備份就略過）；清圖片時不會誤刪', JSON.stringify(out));
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    // 世界書：大小寫不分的比對照常（同一段文字只轉一次小寫）
+    {
+      const { scanWorldInfo } = require(path.join(PROJ, 'lib/prompt.js'));
+      const got = scanWorldInfo([{ name: 'b', entries: [{ keys: ['DRAGON'], content: '龍的設定' }, { keys: ['elf'], content: '精靈', case_sensitive: true }, { keys: ['Sword'], content: '劍' }] }],
+        [{ role: 'user', content: 'a dragon with a sword' }, { role: 'user', content: 'An ELF' }]);
+      ok(got.map(e => e.content).sort().join() === ['劍', '龍的設定'].sort().join(), '世界書：不分大小寫的關鍵字照常觸發，分大小寫的照常不觸發', JSON.stringify(got.map(e => e.content)));
+    }
+    // 清掉的重複程式：settings.js 不再自己定義 download（用 core.js 的）、沒用到的 CSS 拿掉
+    ok(!/const download = /.test(fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8')) && !/\.app-credit/.test(fs.readFileSync(path.join(PROJ, 'public/style.css'), 'utf8')),
+      '清掉重複的 download 與沒用到的 .app-credit');
+
+    // ===== 新功能：模型的上下文長度、.charx 匯出、對話匯出 =====
+    {
+      // LM Studio：/v1/models 沒有長度時，問 /api/v0/models（目前載入的長度）；清單裡沒有的模型不列
+      r = await j('POST', '/api/models', { provider: 'openai', base_url: MOCK + '/v1' });
+      ok(r.status === 200 && r.data.context?.['mock-a']?.loaded === 32768 && r.data.context['mock-a'].max === 131072 && !('not-in-list' in r.data.context),
+        '模型清單：LM Studio 附上目前載入與最多支援的上下文長度', JSON.stringify(r.data));
+      r = await j('POST', '/api/models', { provider: 'openai', base_url: MOCK + '/ctx/v1' });
+      ok(r.status === 200 && r.data.context['or-model']?.max === 200000 && r.data.context['or-small']?.max === 8192 && !('or-none' in r.data.context) && r.data.models.length === 3,
+        '模型清單：OpenRouter 風格的 context_length／top_provider 也讀得到', JSON.stringify(r.data));
+      // Ollama：每個模型問 /api/show（模型上限；Modelfile 有寫 num_ctx 的才有實際長度）
+      r = await j('POST', '/api/models', { provider: 'openai', base_url: MOCK + '/ollama/v1' });
+      ok(r.status === 200 && r.data.context['llama3:8b']?.max === 131072 && r.data.context['llama3:8b'].loaded === 8192 && r.data.context['llama3:8b'].ollama === true
+        && r.data.context['qwen:7b']?.max === 32768 && !('loaded' in r.data.context['qwen:7b']),
+        '模型清單：Ollama 的上下文長度（模型上限與 num_ctx）', JSON.stringify(r.data));
+      ok(/info\.ollama/.test(fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8')), '設定頁：Ollama 沒設定 num_ctx 時提醒實際長度看 Ollama 的設定');
+      const st = fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8');
+      ok(/modelCtx\[p\] = context/.test(st) && /function showCtxNote/.test(st), '設定頁：取得模型清單後在上下文長度下面顯示模型的長度');
+
+      // .charx 匯出：card.json＋封面＋表情圖；匯回來表情圖照樣在
+      const { solidPng } = require(path.join(PROJ, 'lib/png.js'));
+      const { readZip } = require(path.join(PROJ, 'lib/zip.js'));
+      const xc = (await j('POST', '/api/characters', { data: { name: 'Charx 測試', description: '描述' }, cover: 'data:image/png;base64,' + solidPng(6, 6, [9, 9, 9]).toString('base64') })).data;
+      for (const n of ['joy', '開心', 'shy', 'nervous']) await fetch(B + `/api/characters/${xc.id}/expressions?name=${encodeURIComponent(n)}`, { method: 'POST', body: solidPng(4, 4, [n.length * 40, 0, 0]) });
+      const xr = await fetch(B + `/api/characters/${xc.id}/export?format=charx`);
+      const xbuf = Buffer.from(await xr.arrayBuffer());
+      const zipFiles = new Map(readZip(xbuf).map(e => [e.name, e.data]));
+      const card = JSON.parse(zipFiles.get('card.json').toString('utf8'));
+      const emo = card.data.assets.filter(a => a.type === 'emotion').map(a => a.name).sort();
+      const icon = card.data.assets.find(a => a.type === 'icon' && a.name === 'main');
+      ok(xr.status === 200 && /\.charx/.test(decodeURIComponent(xr.headers.get('content-disposition') || '')) && card.spec === 'chara_card_v3' && card.data.name === 'Charx 測試'
+        && JSON.stringify(emo) === JSON.stringify(['joy', '開心', 'embarrassment', 'nervousness'].sort()) && card.data.assets.every(a => !/^embeded:\/\//.test(a.uri) || zipFiles.has(a.uri.slice('embeded://'.length))),
+        '匯出 .charx：card.json 的 assets 列出表情圖，每個檔案都在 ZIP 裡', JSON.stringify(card.data.assets));
+      ok(icon && /^embeded:\/\//.test(icon.uri), '匯出 .charx：封面是 icon「main」', JSON.stringify(icon));
+      ok(zipFiles.has('assets/emotion/image/embarrassment.png') && zipFiles.has('assets/emotion/image/nervousness.png') && ![...zipFiles.keys()].some(k => /\/(shy|nervous)\.png$/.test(k)),
+        '匯出 .charx：shy、nervous 改成 SillyTavern 通用的 embarrassment、nervousness', [...zipFiles.keys()].join(', '));
+      const back = await j('POST', '/api/characters/import', xbuf, { 'X-Filename': encodeURIComponent('x.charx') });
+      ok(back.status === 200 && back.data.name === 'Charx 測試' && [...back.data.expressions.added].sort().join() === ['joy', '開心', 'shy', 'nervous'].sort().join() && (await j('GET', `/api/characters/${back.data.id}`)).data.has_cover === true,
+        '匯出的 .charx 匯回來：表情圖與封面都在', JSON.stringify(back.data));
+      // 編輯頁有「匯出 .charx」
+      ok(/exportCharFile\(ch\.id, 'charx'\)/.test(fs.readFileSync(path.join(PROJ, 'public/js/editors.js'), 'utf8')), '角色編輯頁有「匯出 .charx」按鈕');
+      for (const id of [xc.id, back.data.id]) await j('DELETE', `/api/characters/${id}`);
+
+      // 對話匯出：Markdown、純文字、SillyTavern jsonl
+      const ec = (await j('POST', '/api/characters', { data: { name: '匯出角色', first_mes: '開場白' } })).data;
+      const ech = (await j('POST', `/api/characters/${ec.id}/chats`, {})).data;
+      const cur = (await j('GET', `/api/characters/${ec.id}/chats/${ech.id}`)).data;
+      await j('PUT', `/api/characters/${ec.id}/chats/${ech.id}`, { base_ver: cur.msg_ver, user_name: '小明', messages: [
+        ...cur.messages,
+        { role: 'user', content: '你好', time: Date.now() },
+        { role: 'user', content: '店長走過來', narration: true, time: Date.now() },
+        { role: 'user', content: '要點什麼？', npc: '店長', time: Date.now() },
+        { role: 'assistant', content: '<think>想一下</think>第二版回答', swipes: ['第一版', '<think>想一下</think>第二版回答'], swipe_id: 1, time: Date.now() },
+      ] });
+      // 用原始位元組解碼（fetch 的 text() 會自動拿掉 BOM）
+      const ex = async fmt => { const rr = await fetch(B + `/api/characters/${ec.id}/chats/${ech.id}/export?format=${fmt}`); const raw = Buffer.from(await rr.arrayBuffer()); return { status: rr.status, raw, text: raw.toString('utf8'), cd: decodeURIComponent(rr.headers.get('content-disposition') || '') }; };
+      const md = await ex('md');
+      ok(md.status === 200 && md.cd.endsWith('.md') && md.text.includes('**小明**\n\n你好') && md.text.includes('**旁白**（由小明撰寫）') && md.text.includes('**店長**（NPC，由小明扮演）')
+        && md.text.includes('**匯出角色**\n\n第二版回答') && !md.text.includes('想一下'), '匯出對話（Markdown）：名字照對話設定、用目前的版本、不含思考', md.text);
+      const txt = await ex('txt');
+      ok(txt.status === 200 && txt.raw[0] === 0xef && txt.raw[1] === 0xbb && txt.raw[2] === 0xbf && txt.text.includes('小明：\n你好') && !txt.text.includes('想一下'), '匯出對話（純文字）：有 BOM，記事本開得對', txt.text.slice(0, 200));
+      const jl = await ex('jsonl');
+      const rows = jl.text.trim().split('\n').map(l => JSON.parse(l));
+      const last = rows.at(-1);
+      ok(jl.status === 200 && rows[0].user_name === '小明' && rows[0].character_name === '匯出角色' && rows[1].mes === '開場白' && rows[2].is_user === true
+        && last.name === '匯出角色' && last.mes === '第二版回答' && last.swipe_id === 1 && last.swipes.length === 2 && !jl.text.includes('想一下'),
+        '匯出對話（SillyTavern jsonl）：第一行是對話資訊，之後一則一行', jl.text.slice(0, 400));
+      ok((await ex('pdf')).status === 400, '匯出對話：不認得的格式回 400');
+      r = await j('POST', '/api/export-save', { kind: 'chat', id: `${ec.id}/${ech.id}`, format: 'md' });
+      ok(r.status === 200 && fs.existsSync(r.data.path) && r.data.path.endsWith('.md'), '匯出對話：在這台電腦上直接存到下載資料夾', JSON.stringify(r.data));
+      r = await j('POST', '/api/export-save', { kind: 'chat', id: '../x', format: 'md' });
+      ok(r.status === 400, '匯出對話：不合法的 ID 回 400', r.status);
+      ok(/kind: 'chat'/.test(fs.readFileSync(path.join(PROJ, 'public/js/chat.js'), 'utf8')), '對話設定裡有「匯出這段對話」');
+      // 匯入 SillyTavern 的對話：剛才匯出的 jsonl 匯回來，名字、旁白、NPC、版本都對得上
+      r = await j('POST', `/api/characters/${ec.id}/chats/import`, jl.raw);
+      const imp = r.status === 200 ? (await j('GET', `/api/characters/${ec.id}/chats/${r.data.id}`)).data : {};
+      const im = imp.messages || [];
+      ok(r.status === 200 && r.data.count === 5 && im[1]?.role === 'user' && im[1].content === '你好' && im[2]?.narration === true && im[3]?.npc === '店長'
+        && im[4]?.role === 'assistant' && im[4].swipes.length === 2 && im[4].swipe_id === 1 && im[4].content === '第二版回答' && imp.user_name === '小明' && (imp.npcs || []).includes('店長'),
+        '匯入 SillyTavern 對話：你、旁白、NPC、角色與版本都還原', JSON.stringify(imp).slice(0, 600));
+      // SillyTavern 自己的格式：send_date 是「November 27, 2026 3:04pm」這種字串、is_system 的訊息算旁白
+      const stText = [JSON.stringify({ user_name: 'Me', character_name: '匯出角色' }),
+        JSON.stringify({ name: '匯出角色', is_user: false, send_date: 'November 27, 2026 3:04pm', mes: 'Hi' }),
+        JSON.stringify({ name: 'Me', is_user: true, send_date: 'November 27, 2026 3:05pm', mes: 'Hello' }),
+        JSON.stringify({ name: 'System', is_user: false, is_system: true, mes: '（場景切換）' })].join('\n');
+      r = await j('POST', `/api/characters/${ec.id}/chats/import`, Buffer.from(stText));
+      const st2 = (await j('GET', `/api/characters/${ec.id}/chats/${r.data.id}`)).data;
+      ok(r.status === 200 && st2.messages.length === 3 && st2.messages[0].time === new Date('November 27, 2026 3:04 pm').getTime() && st2.messages[2].speaker === 'narrator',
+        '匯入 SillyTavern 對話：讀得懂它的時間格式，is_system 算旁白', JSON.stringify(st2.messages));
+      r = await j('POST', `/api/characters/${ec.id}/chats/import`, Buffer.from('不是 JSON\n'));
+      ok(r.status === 400 && /不是 JSON/.test(r.data.error), '匯入對話：不是 jsonl 時回 400', JSON.stringify(r.data));
+      r = await j('POST', `/api/characters/${ec.id}/chats/import`, Buffer.from(JSON.stringify({ user_name: 'x' })));
+      ok(r.status === 400, '匯入對話：沒有訊息時回 400', r.status);
+      const worldJs = fs.readFileSync(path.join(PROJ, 'public/js/world.js'), 'utf8'), chatJs = fs.readFileSync(path.join(PROJ, 'public/js/chat.js'), 'utf8');
+      ok(!/importChatFile/.test(fs.readFileSync(path.join(PROJ, 'public/js/editors.js'), 'utf8')) && /cardTokens\(d, importChatBtn\(id\)\)/.test(worldJs)
+        && /importChatBtn\(WORLD_PREFIX \+ id\)/.test(worldJs) && /importChatFile\(charId, \{ into: chatId \}\)/.test(chatJs),
+        '「匯入對話」在角色與世界的檢視頁、對話設定裡（不在編輯頁）');
+      // 從對話設定匯入：還停在開場白就直接帶入這段，已經有內容就開一段新的
+      const fresh = (await j('POST', `/api/characters/${ec.id}/chats`, {})).data;
+      r = await j('POST', `/api/characters/${ec.id}/chats/import?into=${fresh.id}`, Buffer.from(stText));
+      const intoChat = (await j('GET', `/api/characters/${ec.id}/chats/${fresh.id}`)).data;
+      ok(r.status === 200 && r.data.replaced === true && r.data.id === fresh.id && intoChat.messages.length === 3 && intoChat.messages[0].content === 'Hi' && intoChat.user_name === 'Me' && !intoChat.persona_id,
+        '對話設定匯入：還停在開場白時直接帶入這段對話（名字改成檔案裡的）', JSON.stringify(r.data));
+      r = await j('POST', `/api/characters/${ec.id}/chats/import?into=${fresh.id}`, Buffer.from(stText));
+      const still = (await j('GET', `/api/characters/${ec.id}/chats/${fresh.id}`)).data;
+      ok(r.status === 200 && r.data.replaced === false && r.data.id !== fresh.id && still.messages.length === 3, '對話設定匯入：已經有內容時開一段新的，這段不受影響', JSON.stringify(r.data));
+      await j('DELETE', `/api/characters/${ec.id}`);
+    }
+
+    // ===== 備份非同步、匯出改成串流 =====
+    {
+      // 非同步的自動備份：結果和同步的一樣（沒變就略過），而且備份期間伺服器照常處理其他工作
+      const os = require('os'), { execFileSync } = require('child_process');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tavern-abk-'));
+      const data = path.join(dir, 'data');
+      for (let i = 0; i < 60; i++) {
+        fs.mkdirSync(path.join(data, 'char', `c${i}-x`), { recursive: true });
+        fs.writeFileSync(path.join(data, 'char', `c${i}-x`, 'card.json'), JSON.stringify({ data: { name: 'C' + i, description: 'x'.repeat(20000) } }));
+      }
+      const script = `
+        const fs = require('fs'), path = require('path');
+        const bk = require(${JSON.stringify(path.join(PROJ, 'lib/backup.js'))});
+        (async () => {
+          let ticks = 0; const t = setInterval(() => ticks++, 0);
+          const a = await bk.startupBackupAsync(5);
+          clearInterval(t);
+          const b = await bk.startupBackupAsync(5);
+          fs.writeFileSync(path.join(process.env.TAVERN_DATA_DIR, 'char', 'c0-x', 'card.json'), '{"data":{"name":"改了"}}');
+          const c = await bk.startupBackupAsync(5);
+          const content = bk.readBackup(c);
+          console.log(JSON.stringify({ a: !!a, b, c: !!c, ticks, name: JSON.parse(content.files['char/c0-x/card.json'].t).data.name, n: Object.keys(content.files).length }));
+        })().catch(e => { console.log(JSON.stringify({ error: e.message })); });`;
+      let out = {};
+      try {
+        out = JSON.parse(execFileSync(process.execPath, ['-e', script], { cwd: PROJ, encoding: 'utf8',
+          env: { ...process.env, TAVERN_DATA_DIR: data, TAVERN_CONFIG: path.join(dir, 'config.json'), TAVERN_WINDOW_FILE: path.join(dir, 'window.json') } }).trim().split('\n').pop());
+      } catch (e) { out = { error: String(e.stdout || e.message).slice(-300) }; }
+      ok(out.a && out.b === null && out.c && out.name === '改了' && out.n >= 61, '非同步自動備份：沒變時略過、有變動就建立，內容完整', JSON.stringify(out));
+      ok(out.ticks > 0, '非同步自動備份：備份期間伺服器照常處理其他工作（不會整個停住）', JSON.stringify(out));
+      fs.rmSync(dir, { recursive: true, force: true });
+      const srv = fs.readFileSync(path.join(PROJ, 'server.js'), 'utf8');
+      ok(/startupBackupRun = backup\.startupBackupAsync/.test(srv) && /await startupBackupRun/.test(srv) && /await backup\.startupBackupAsync\(keep\)/.test(srv) && /await backup\.createBackupAsync\(\{ force: true, kind: 'manual' \}\)/.test(srv),
+        '伺服器：啟動、關閉與手動備份都用非同步的版本；關閉前先等啟動時的備份做完');
+
+      // 匯出全部資料：一段一段產生，解壓縮後是完整的備份格式，可以再匯入
+      const zlib = require('zlib');
+      const er = await fetch(B + '/api/export');
+      const ebuf = Buffer.from(await er.arrayBuffer());
+      let bundle = null;
+      try { bundle = JSON.parse(zlib.gunzipSync(ebuf).toString('utf8')); } catch { /* 下面會失敗 */ }
+      ok(er.status === 200 && !er.headers.get('content-length') && bundle?.app === 'ai-tavern' && /^[0-9a-f]{40}$/.test(bundle.hash) && Object.keys(bundle.files).some(k => k === 'settings.json')
+        && Object.values(bundle.files).every(v => typeof v.t === 'string' || typeof v.b === 'string'),
+        '匯出全部資料：串流送出（沒有 Content-Length），內容是完整的備份格式', JSON.stringify({ s: er.status, keys: bundle && Object.keys(bundle) }));
+      r = await j('POST', '/api/export-save', { kind: 'all' });
+      let saved = null;
+      try { saved = JSON.parse(zlib.gunzipSync(fs.readFileSync(r.data.path)).toString('utf8')); } catch { /* 下面會失敗 */ }
+      ok(r.status === 200 && saved?.app === 'ai-tavern' && Object.keys(saved.files).length === Object.keys(bundle.files).length, '匯出全部資料：直接存檔也是串流寫入，檔案完整', JSON.stringify(r.data));
+      // 下載不存在的備份：還沒開始送出就回錯誤（不是送到一半斷掉）
+      r = await j('GET', '/api/backups/backup-20000101-000000.tavern/download');
+      ok(r.status >= 400 && r.status < 500 && typeof r.data.error === 'string', '下載不存在的備份：回錯誤訊息', JSON.stringify(r));
+      const bl = (await j('GET', '/api/backups')).data.items;
+      if (bl.length) {
+        const dr = await fetch(B + `/api/backups/${bl[0].name}/download`);
+        let db = null;
+        try { db = JSON.parse(zlib.gunzipSync(Buffer.from(await dr.arrayBuffer())).toString('utf8')); } catch { /* 下面會失敗 */ }
+        ok(dr.status === 200 && db?.app === 'ai-tavern' && Object.values(db.files).every(v => !v.h), '下載備份：串流送出，共用的圖片換成實際內容', JSON.stringify(db && Object.keys(db)));
+      }
+      ok(typeof require(path.join(PROJ, 'lib/backup.js')).exportAll === 'undefined', '舊的一次組成整個字串的 exportAll 已經拿掉');
+    }
+    // 大世界的對話匯入：名字對得上成員的算那位角色，其他算旁白
+    {
+      const m1 = (await j('POST', '/api/characters', { data: { name: '甲' } })).data;
+      const wd = (await j('POST', '/api/bigworlds', { data: { name: '匯入世界', members: [{ id: m1.id }] } })).data;
+      const wl = [JSON.stringify({ user_name: 'U' }), JSON.stringify({ name: '甲', is_user: false, mes: '我是甲' }), JSON.stringify({ name: '路人', is_user: false, mes: '路過' }), JSON.stringify({ name: 'U', is_user: true, mes: '嗨' })].join('\n');
+      r = await j('POST', `/api/characters/world-${wd.id}/chats/import`, Buffer.from(wl));
+      const wc = r.status === 200 ? (await j('GET', `/api/characters/world-${wd.id}/chats/${r.data.id}`)).data : {};
+      ok(r.status === 200 && wc.messages?.[0]?.speaker === m1.id && wc.messages[1].speaker === 'narrator' && wc.messages[2].role === 'user' && !!wc.turn_mode,
+        '大世界匯入對話：成員對回角色，對不上的算旁白', JSON.stringify(wc.messages || r.data));
+      await j('DELETE', `/api/bigworlds/${wd.id}`); await j('DELETE', `/api/characters/${m1.id}`);
+    }
+
+    // ===== Node.js 22、快取清理、卡片同時編輯、單一訊息存檔 =====
+    {
+      // 最低 Node.js 版本：各處一致是 22
+      const lc = fs.readFileSync(path.join(PROJ, 'tools/launcher/Launcher.cs'), 'utf8');
+      ok(JSON.parse(fs.readFileSync(path.join(PROJ, 'package.json'), 'utf8')).engines.node === '>=22' && /const int MinNode = 22;/.test(lc)
+        && /< 22 \? 1 : 0/.test(fs.readFileSync(path.join(PROJ, 'start.bat'), 'utf8')) && /< 22 \? 1 : 0/.test(fs.readFileSync(path.join(PROJ, 'start.sh'), 'utf8'))
+        && /process\.versions\.node\.split\('\.'\)\[0\] < 22/.test(fs.readFileSync(path.join(PROJ, 'launch.js'), 'utf8')),
+        '最低 Node.js 版本：package.json、啟動程式、start.bat、start.sh、launch.js 都是 22');
+      ok(/版本太舊/.test(lc) && /oldVersion/.test(lc), '啟動程式：安裝的 Node.js 太舊、改用內附版本時，說明是版本太舊（不是找不到）');
+
+      // 快取清理：只清快取，Local Storage（草稿）不動
+      const prof = process.env.TAVERN_PROFILE_DIR;
+      for (const [d, f] of [['Default/Cache', 'a'], ['Default/Code Cache', 'b'], ['GrShaderCache', 'c'], ['Default/Local Storage', 'keep']]) {
+        fs.mkdirSync(path.join(prof, d), { recursive: true }); fs.writeFileSync(path.join(prof, d, f), 'x'.repeat(5000));
+      }
+      r = await j('GET', '/api/app-cache');
+      ok(r.status === 200 && r.data.exists && r.data.cache >= 15000 && r.data.size >= 20000, '快取清理：算得出整個資料夾與可以清掉的大小', JSON.stringify(r.data));
+      r = await j('POST', '/api/app-cache/clear');
+      ok(r.status === 200 && r.data.freed >= 15000 && !r.data.pending && !fs.existsSync(path.join(prof, 'Default/Cache')) && fs.existsSync(path.join(prof, 'Default/Local Storage/keep')),
+        '快取清理：清掉快取，Local Storage（輸入框的草稿）保留', JSON.stringify(r.data));
+      ok(/clearPending\(\)/.test(fs.readFileSync(path.join(PROJ, 'launch.js'), 'utf8')) && /清理快取/.test(fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8')),
+        '快取清理：設定頁有按鈕；當時清不掉的下次啟動時清');
+      ok(/file\.size > 300 \* MB/.test(fs.readFileSync(path.join(PROJ, 'public/js/settings.js'), 'utf8')), '匯入資料：檔案很大時建議改用直接複製 userdata 資料夾');
+
+      // 卡片同時編輯：版本不一樣時回 409 card_stale；force 才覆蓋；表情改名後的新版本照樣能存
+      const cc = (await j('POST', '/api/characters', { data: { name: '版本測試' } })).data;
+      const v1 = (await j('GET', `/api/characters/${cc.id}`)).data;
+      r = await j('PUT', `/api/characters/${cc.id}`, { data: { ...v1.data, description: '別的視窗改的' }, base_ver: v1.ver });
+      const v2 = r.data.ver;
+      ok(r.status === 200 && typeof v2 === 'string' && v2 !== v1.ver, '角色卡：版本對得上時照常儲存，回傳新的版本');
+      r = await j('PUT', `/api/characters/${cc.id}`, { data: { ...v1.data, description: '舊畫面的內容' }, base_ver: v1.ver });
+      ok(r.status === 409 && r.data.code === 'card_stale' && (await j('GET', `/api/characters/${cc.id}`)).data.data.description === '別的視窗改的', '角色卡：打開之後被別處改過時回 409，不會蓋掉', JSON.stringify(r.data));
+      r = await j('PUT', `/api/characters/${cc.id}`, { data: { ...v1.data, description: '仍要覆蓋' }, base_ver: v1.ver, force: true });
+      ok(r.status === 200 && (await j('GET', `/api/characters/${cc.id}`)).data.data.description === '仍要覆蓋', '角色卡：選「仍要覆蓋」（force）時照樣存');
+      const { solidPng } = require(path.join(PROJ, 'lib/png.js'));
+      await fetch(B + `/api/characters/${cc.id}/expressions?name=joy`, { method: 'POST', body: solidPng(4, 4, [1, 2, 3]) });
+      const cur = (await j('GET', `/api/characters/${cc.id}`)).data;
+      await j('PUT', `/api/characters/${cc.id}`, { data: { ...cur.data, extensions: { ai_tavern_expressions: { default: 'joy' } } }, base_ver: cur.ver });
+      r = await j('PUT', `/api/characters/${cc.id}/expressions/rename`, { from: 'joy', to: 'happy' }); // 預設表情跟著改 → 卡片版本變了
+      const after = await j('PUT', `/api/characters/${cc.id}`, { data: { ...cur.data, extensions: { ai_tavern_expressions: { default: 'happy' } } }, base_ver: r.data.card_ver });
+      ok(typeof r.data.card_ver === 'string' && after.status === 200, '角色卡：表情改名順便改到卡片時回傳新的版本，編輯頁用它存檔不會誤判', JSON.stringify(after.data).slice(0, 200));
+      ok(/askCardStale\('角色卡'\)/.test(fs.readFileSync(path.join(PROJ, 'public/js/editors.js'), 'utf8')) && /askCardStale\('世界書'\)/.test(fs.readFileSync(path.join(PROJ, 'public/js/editors.js'), 'utf8'))
+        && /askCardStale\('世界卡'\)/.test(fs.readFileSync(path.join(PROJ, 'public/js/world.js'), 'utf8')) && /仍要覆蓋[\s\S]*重新讀取|重新讀取[\s\S]*仍要覆蓋/.test(fs.readFileSync(path.join(PROJ, 'public/js/core.js'), 'utf8')),
+        '三個編輯頁：被別處改過時跳出「取消／重新讀取／仍要覆蓋」');
+      // 世界書與大世界一樣
+      const wb = (await j('POST', '/api/worlds', { name: '版本世界書', entries: [] })).data;
+      const wv = (await j('GET', `/api/worlds/${wb.id}`)).data;
+      await j('PUT', `/api/worlds/${wb.id}`, { ...wv, name: '改過', base_ver: wv.ver });
+      r = await j('PUT', `/api/worlds/${wb.id}`, { ...wv, name: '舊的', base_ver: wv.ver });
+      ok(r.status === 409 && r.data.code === 'card_stale' && (await j('GET', `/api/worlds/${wb.id}`)).data.name === '改過', '世界書：被別處改過時回 409');
+      r = await j('GET', `/api/worlds/${wb.id}/export`);
+      ok(r.status === 200 && !('ver' in r.data) && !('base_ver' in r.data), '世界書：匯出的檔案不含版本欄位', JSON.stringify(r.data).slice(0, 100));
+      await j('DELETE', `/api/worlds/${wb.id}`);
+      const bw = (await j('POST', '/api/bigworlds', { data: { name: '版本世界' } })).data;
+      const bv = (await j('GET', `/api/bigworlds/${bw.id}`)).data;
+      await j('PUT', `/api/bigworlds/${bw.id}`, { data: { name: '改過的世界' }, base_ver: bv.ver });
+      r = await j('PUT', `/api/bigworlds/${bw.id}`, { data: { name: '舊畫面' }, base_ver: bv.ver });
+      ok(r.status === 409 && r.data.code === 'card_stale' && (await j('GET', `/api/bigworlds/${bw.id}`)).data.name === '改過的世界', '大世界：被別處改過時回 409');
+      r = await j('PUT', `/api/bigworlds/${bw.id}`, { data: { name: '覆蓋' }, base_ver: bv.ver, force: true });
+      ok(r.status === 200 && r.data.name === '覆蓋', '大世界：仍要覆蓋時照樣存');
+      await j('DELETE', `/api/bigworlds/${bw.id}`);
+
+      // 只存一則訊息（編輯、切換版本）；對話檔不縮排
+      const sch = (await j('POST', `/api/characters/${cc.id}/chats`, {})).data;
+      const sc = (await j('GET', `/api/characters/${cc.id}/chats/${sch.id}`)).data;
+      await j('PUT', `/api/characters/${cc.id}/chats/${sch.id}`, { base_ver: sc.msg_ver, messages: [{ role: 'assistant', content: 'A', swipes: ['A', 'B'], swipe_id: 0 }, { role: 'user', content: '嗨' }] });
+      const sc2 = (await j('GET', `/api/characters/${cc.id}/chats/${sch.id}`)).data;
+      r = await j('PUT', `/api/characters/${cc.id}/chats/${sch.id}/messages/1`, { message: { role: 'user', content: '改過的嗨', npc: '店員' }, base_ver: sc2.msg_ver });
+      const sc3 = (await j('GET', `/api/characters/${cc.id}/chats/${sch.id}`)).data;
+      ok(r.status === 200 && r.data.msg_ver === sc3.msg_ver && sc3.messages[1].content === '改過的嗨' && sc3.messages[0].content === 'A' && (sc3.npcs || []).includes('店員'),
+        '只存一則訊息：其他訊息不動，回傳新的訊息版本，新的 NPC 加進名單', JSON.stringify(r.data));
+      r = await j('PUT', `/api/characters/${cc.id}/chats/${sch.id}/messages/0`, { message: { role: 'assistant', content: 'B', swipes: ['A', 'B'], swipe_id: 1 }, base_ver: sc2.msg_ver });
+      ok(r.status === 409 && r.data.code === 'stale', '只存一則訊息：別的視窗改過時回 409');
+      ok((await j('PUT', `/api/characters/${cc.id}/chats/${sch.id}/messages/9`, { message: { role: 'user', content: 'x' } })).status === 404
+        && (await j('PUT', `/api/characters/${cc.id}/chats/${sch.id}/messages/0`, { message: { content: 'x' } })).status === 400, '只存一則訊息：位置不對 404、格式不對 400');
+      ok(/saveMessage\(i\)/.test(fs.readFileSync(path.join(PROJ, 'public/js/chat.js'), 'utf8')), '前端：編輯訊息、切換版本只送那一則');
+      const find = d => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) { const f = find(p); if (f) return f; } else if (e.name === sch.id + '.json') return p; } return null; };
+      const raw = fs.readFileSync(find(path.join(TD, 'char')), 'utf8');
+      ok(!raw.includes('\n') && JSON.parse(raw).messages.length === 2, '對話檔不縮排（整份重寫時少寫三成）');
+
+      // 刪除訊息的復原：在原本的位置留「訊息已刪除」的框，可以放回去
+      const durl = `/api/characters/${cc.id}/chats/${sch.id}`;
+      const autoWas = (await j('GET', '/api/settings')).data.memory_auto;
+      await j('PUT', '/api/settings', { memory_auto: false }); // 先測位置的挪動（不在背景重新整理記憶），自動整理另外測
+      const t0 = Date.now() - 100000;
+      const six = Array.from({ length: 6 }, (_, k) => ({ role: k % 2 ? 'user' : 'assistant', content: `第${k}則`, time: t0 + k }));
+      let dv = (await j('GET', durl)).data;
+      await j('PUT', durl, { base_ver: dv.msg_ver, messages: six, memory: '記憶內容', memory_upto: 4, memory_cut: 3 });
+      dv = (await j('GET', durl)).data;
+      r = await j('POST', `${durl}/messages/1/delete`, { base_ver: dv.msg_ver });
+      let dc = r.data.chat;
+      ok(r.status === 200 && dc.messages.length === 5 && dc.messages[1].content === '第2則' && dc.deleted?.length === 1 && dc.deleted[0].i === 1 && dc.deleted[0].msgs[0].content === '第1則' && r.data.in_memory,
+        '刪除訊息：留下「訊息已刪除」的框（位置、刪掉的內容），提醒已經整理進記憶', JSON.stringify(r.data).slice(0, 300));
+      ok(dc.memory_upto === 3 && dc.memory_cut === 2, '刪除一則：記憶進度與壓縮切點只往前移一則（後面整理過的訊息不會再整理一次）', `${dc.memory_upto}/${dc.memory_cut}`);
+      r = await j('GET', `${durl}/export?format=jsonl`);
+      const md = await (await fetch(B + `${durl}/export?format=md`)).text();
+      ok(!md.includes('第1則') && !JSON.stringify(r.data ?? '').includes('第1則'), '刪除的訊息不會出現在匯出的對話裡');
+      const br = (await j('POST', `/api/characters/${cc.id}/chats`, { branch_from: sch.id, upto: 4 })).data;
+      ok(!('deleted' in br) && br.messages.length === 5, '分支：不帶「訊息已刪除」的框');
+      r = await j('POST', `${durl}/deleted/${dc.deleted[0].id}/restore`, { base_ver: dc.msg_ver });
+      dc = r.data.chat;
+      ok(r.status === 200 && dc.messages.map(m => m.content).join() === six.map(m => m.content).join() && !dc.deleted && dc.memory_upto === 4 && dc.memory_cut === 3 && !r.data.gap,
+        '還原（之後沒有新訊息）：放回原本的位置，記憶進度與切點加回去', JSON.stringify(r.data).slice(0, 300));
+      // 刪掉最後一則（在記憶進度上）、之後又有新訊息：要選怎麼處理新訊息
+      r = await j('POST', `${durl}/messages/3/delete`, { base_ver: dc.msg_ver, all: true });
+      dc = r.data.chat;
+      ok(dc.messages.length === 3 && dc.deleted[0].msgs.length === 3 && dc.memory_upto === 3 && dc.memory_cut === 3, '刪除此則及之後：框裡是全部刪掉的訊息，記憶進度退回刪除的位置', `${dc.memory_upto}/${dc.memory_cut}`);
+      const did = dc.deleted[0].id;
+      await j('PUT', durl, { base_ver: dc.msg_ver, messages: [...dc.messages, { role: 'user', content: '新的訊息', time: Date.now() + 5000 }] });
+      dv = (await j('GET', durl)).data;
+      r = await j('POST', `${durl}/deleted/${did}/restore`, { base_ver: dv.msg_ver });
+      ok(r.status === 409 && r.data.code === 'newer' && /又有 1 則訊息/.test(r.data.error), '還原：刪除之後有新訊息時，沒指定怎麼處理就不動', JSON.stringify(r.data));
+      r = await j('POST', `${durl}/deleted/${did}/restore`, { base_ver: dv.msg_ver, mode: 'branch' });
+      dc = r.data.chat;
+      const brc = r.data.branch && (await j('GET', `/api/characters/${cc.id}/chats/${r.data.branch}`)).data;
+      ok(r.status === 200 && dc.messages.length === 6 && !dc.messages.some(m => m.content === '新的訊息') && brc?.messages.at(-1).content === '新的訊息' && !('deleted' in brc) && dc.memory_upto === 4 && dc.memory_cut === 3,
+        '還原（存成分支）：目前的對話另存分支，這裡回到刪除當時；剛好在記憶進度上的也算回已整理', JSON.stringify(r.data).slice(0, 200));
+      r = await j('POST', `${durl}/messages/5/delete`, { base_ver: dc.msg_ver });
+      dc = r.data.chat;
+      await j('PUT', durl, { base_ver: dc.msg_ver, messages: [...dc.messages, { role: 'user', content: '又一則', time: Date.now() + 5000 }] });
+      dv = (await j('GET', durl)).data;
+      r = await j('POST', `${durl}/deleted/${dv.deleted[0].id}/restore`, { base_ver: dv.msg_ver, mode: 'drop' });
+      ok(r.status === 200 && r.data.chat.messages.length === 6 && r.data.chat.messages[5].content === '第5則' && !r.data.branch, '還原（刪除之後的新訊息）：新訊息刪掉，放回刪除的訊息');
+      dc = r.data.chat;
+      // 每段對話只留最近 10 筆
+      for (let k = 0; k < 12; k++) {
+        if (dc.messages.length < 2) { await j('PUT', durl, { base_ver: dc.msg_ver, messages: [...dc.messages, ...six] }); dc = (await j('GET', durl)).data; }
+        dc = (await j('POST', `${durl}/messages/0/delete`, { base_ver: dc.msg_ver })).data.chat;
+      }
+      ok(dc.deleted.length === 10, '「訊息已刪除」的框每段對話只留最近 10 筆', dc.deleted.length);
+      // 關掉框：不留了，對話清單的順序不變（不算對話有變動）
+      const upd = dc.updated;
+      r = await j('DELETE', `${durl}/deleted/${dc.deleted[0].id}`);
+      const afterX = (await j('GET', durl)).data;
+      ok(r.status === 200 && r.data.deleted.length === 9 && afterX.deleted.length === 9 && afterX.updated === upd, '關掉「訊息已刪除」的框：拿掉這筆，對話的更新時間不變');
+      r = await j('PUT', durl, { base_ver: afterX.msg_ver, messages: [], snapshot: 'clear' });
+      ok(r.status === 200 && !('deleted' in r.data), '清空聊天：「訊息已刪除」的框一起清掉');
+
+      // 刪掉已經整理進記憶的訊息：背景從頭重新整理到原本的進度（舊的記憶留成上一版）
+      await j('PUT', '/api/settings', { memory_auto: true });
+      const memDone = async () => { for (let k = 0; k < 60 && (await j('GET', '/api/chats')).data.find(x => x.id === sch.id)?.memory_updating; k++) await new Promise(res => setTimeout(res, 100)); return (await j('GET', durl)).data; };
+      dv = (await j('GET', durl)).data;
+      await j('PUT', durl, { base_ver: dv.msg_ver, messages: six, memory: '舊記憶', memory_upto: 4, memory_cut: 3 });
+      dv = (await j('GET', durl)).data;
+      r = await j('POST', `${durl}/messages/1/delete`, { base_ver: dv.msg_ver });
+      ok(r.status === 200 && r.data.memory_updating === true, '刪掉整理過的訊息：自動在背景重新整理記憶', JSON.stringify(r.data).slice(-120));
+      dc = await memDone();
+      const memReq = JSON.stringify(lastReq().messages);
+      ok(dc.memory && dc.memory !== '舊記憶' && dc.memory_prev?.text === '舊記憶' && dc.memory_upto === 3 && dc.memory_cut === 2 && dc.deleted[0].mem === 0 && !dc.memory_partial,
+        '重新整理完成：舊記憶留成上一版，進度回到原本的位置，框標成「不在記憶裡」', JSON.stringify({ m: dc.memory, u: dc.memory_upto, c: dc.memory_cut, d: dc.deleted?.[0]?.mem }));
+      ok(memReq.includes('第3則') && !memReq.includes('第1則') && !memReq.includes('第4則'), '重新整理只送剩下的、原本整理到的訊息（刪掉的不送、還沒整理的不送）', memReq.slice(0, 200));
+      r = await j('POST', `${durl}/deleted/${dc.deleted[0].id}/restore`, { base_ver: dc.msg_ver });
+      ok(r.status === 200 && r.data.memory_updating === true && r.data.chat.memory_upto === 4, '還原記憶裡沒有的訊息：進度挪回去，並自動重新整理', JSON.stringify(r.data).slice(-150));
+      dc = await memDone();
+      ok(JSON.stringify(lastReq().messages).includes('第1則') && dc.memory_upto === 4, '還原後重新整理：放回的訊息也整理進記憶');
+      // 整理過的訊息全刪了：記憶清空（原本的留成上一版）
+      await j('PUT', durl, { base_ver: dc.msg_ver, memory: '只記了第一則', memory_upto: 1, memory_cut: 0 });
+      dc = (await j('GET', durl)).data;
+      r = await j('POST', `${durl}/messages/0/delete`, { base_ver: dc.msg_ver });
+      ok(r.data.memory_cleared && r.data.chat.memory === '' && r.data.chat.memory_prev?.text === '只記了第一則', '整理過的訊息全刪了：記憶清空，原本的留成上一版', JSON.stringify(r.data).slice(-150));
+      // 編輯已經整理進記憶的訊息：當下只提醒，記憶不動；下次生成完成後才從頭重新整理
+      dc = (await j('GET', durl)).data;
+      await j('PUT', durl, { base_ver: dc.msg_ver, messages: six, memory: '編輯前的記憶', memory_upto: 4, memory_cut: 0 });
+      dc = (await j('GET', durl)).data;
+      r = await j('PUT', `${durl}/messages/5`, { message: { ...dc.messages[5], content: '改了沒整理的' }, base_ver: dc.msg_ver });
+      ok(r.status === 200 && r.data.memory_stale === false && !(await j('GET', durl)).data.memory_stale, '編輯還沒整理進記憶的訊息：不用重新整理');
+      dc = (await j('GET', durl)).data;
+      r = await j('PUT', `${durl}/messages/1`, { message: { ...dc.messages[1], content: '第1則（改過 EDITMEM）' }, base_ver: dc.msg_ver });
+      dc = (await j('GET', durl)).data;
+      ok(r.status === 200 && r.data.memory_stale === true && r.data.memory_later === true && dc.memory_stale === true && dc.memory === '編輯前的記憶' && !dc.memory_updating,
+        '編輯整理過的訊息：記憶先不動，記下「待重新整理」', JSON.stringify(r.data));
+      const evE = await gen({ char_id: cc.id, chat_id: sch.id, mode: 'normal', user_message: '編輯後送出' });
+      ok(evE.find(e => e.type === 'done')?.memory_updating === true, '下次生成完成後：在背景重新整理記憶', JSON.stringify(evE.find(e => e.type === 'done') || evE.at(-1)).slice(0, 150));
+      dc = await memDone();
+      ok(!dc.memory_stale && dc.memory !== '編輯前的記憶' && dc.memory_prev?.text === '編輯前的記憶' && dc.memory_upto === 4 && JSON.stringify(lastReq().messages).includes('EDITMEM'),
+        '重新整理用的是改過的內容，整理完拿掉「待重新整理」', JSON.stringify({ s: dc.memory_stale, m: dc.memory, u: dc.memory_upto }));
+      // 手動改記憶：以你寫的為準，不再自動重新整理
+      r = await j('PUT', `${durl}/messages/1`, { message: { ...dc.messages[1], content: '再改一次' }, base_ver: dc.msg_ver });
+      r = await j('PUT', durl, { memory: '我自己寫的記憶' });
+      ok(!r.data.memory_stale, '手動修改記憶：拿掉「待重新整理」');
+      await j('PUT', '/api/settings', { memory_auto: autoWas });
+      // 編輯紀錄：只留最初版與最後送出的版本，編輯過的訊息有「還原」按鈕切換
+      const cj = fs.readFileSync(path.join(PROJ, 'public/js/chat.js'), 'utf8');
+      ok(/function setEdited/.test(cj) && /toggleEdited\(i\)/.test(cj) && /deletedAt\(i\)/.test(cj) && /存成分支並還原/.test(cj), '前端：編輯過的訊息可以切換最初版，刪除的位置有可以還原的框');
+      ok(!/[^.]deleted\b/.test(fs.readFileSync(path.join(PROJ, 'lib/prompt.js'), 'utf8')), '「訊息已刪除」的框不會送給 AI（組提示詞不讀它）');
+
+      // 大世界：第一輪整輪刪掉、從玩家的訊息重新生成時，不能沿用被刪掉那一輪留下的在場名單（有人離場就只會安排一位）
+      const { restorePresent } = require(path.join(PROJ, 'lib/turns.js'));
+      const rp = { messages: [{ role: 'assistant', content: '開場', greeting: true }, { role: 'user', content: '大家好' }], present: ['roa'] };
+      restorePresent(rp, false);
+      ok(rp.present === null, '在場角色：只剩開場白與玩家的訊息時回到「還不知道」，由導演重新判斷');
+      const rp2 = { messages: [{ role: 'assistant', content: '舊回應', speaker: 'roa' }, { role: 'user', content: '嗨' }], present: ['roa'] };
+      restorePresent(rp2, false);
+      ok(rp2.present?.[0] === 'roa', '在場角色：舊對話（角色訊息沒有記錄）維持原本的名單');
+      const rp3 = { messages: [{ role: 'assistant', content: '開場', greeting: true }, { role: 'user', content: 'a' }, { role: 'assistant', content: 'b', speaker: 'roa', present_after: ['roa', 'edi'] }, { role: 'user', content: 'c' }], present: ['roa'] };
+      restorePresent(rp3, false);
+      ok(rp3.present?.length === 2, '在場角色：刪掉後面幾輪時回到剩下的最後一則角色訊息當時');
+      // 版面：對話區先留好捲軸的位置；狀態欄的圖片框不會因為換表情而在 3:4 和 16:9 之間跳
+      ok(/#messages \{[^}]*scrollbar-gutter: stable/.test(fs.readFileSync(path.join(PROJ, 'public/style.css'), 'utf8')), '對話區先留好捲軸的位置（出現捲軸時對話框不會變窄）');
+      ok(/classList\.toggle\('wide', !!\(/.test(cj), '狀態欄圖片框：wide 一定給 true／false（undefined 會變成來回切換）');
+      await j('DELETE', `/api/characters/${cc.id}`);
+    }
+
+    // 開發用的預覽設定不能用 8000 與真正的 userdata/
+    const launch = JSON.parse(fs.readFileSync(path.join(PROJ, '.claude/launch.json'), 'utf8'));
+    const pv = fs.readFileSync(path.join(PROJ, 'tools/preview.js'), 'utf8');
+    ok(launch.configurations.every(cf => cf.port !== 8000) && /TAVERN_DATA_DIR/.test(pv) && /TAVERN_CONFIG/.test(pv) && /8123/.test(pv), '預覽設定：用 8123 與另外的資料夾');
   }
 
   console.log(`\n${pass} passed, ${failN} failed`);

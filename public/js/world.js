@@ -49,7 +49,9 @@ async function openWorldDetail(id) {
       w.intro?.trim()
         ? h('div', { class: 'detail-intro mtext', html: formatText(nameMacros(w.intro, w.name)) })
         : h('div', { class: 'detail-intro muted' }, '（還沒有介紹，可以按「編輯世界」填寫）')),
-    chatButtons({ id: WORLD_PREFIX + id, last_chat: info.last_chat }, closeModal));
+    chatButtons({ id: WORLD_PREFIX + id, last_chat: info.last_chat }, closeModal),
+    // 匯入 SillyTavern 的群組對話：名字對得上成員的算那位角色說的，其他算旁白
+    h('div', { class: 'detail-tokens detail-import' }, importChatBtn(WORLD_PREFIX + id)));
   openModal(w.name, body, [], { esc: true });
 }
 
@@ -89,6 +91,12 @@ async function openBigWorldEditor(id, { back } = {}) {
   };
   await Promise.all(d.members.map(m => loadCard(m.id)));
   const cover = { url: null, remove: false };
+  // 狀態欄的欄位（所有成員共用角色欄位、玩家欄位一份；和角色卡的格式相同）
+  const statusLists = {
+    char_fields: structuredClone(Array.isArray(d.status?.char_fields) ? d.status.char_fields : []),
+    user_fields: structuredClone(Array.isArray(d.status?.user_fields) ? d.status.user_fields : []),
+  };
+  const statusEd = statusFieldsEditor(statusLists, { world: true });
   const f = {};
   const field = fieldMaker(f, d);
 
@@ -425,6 +433,7 @@ async function openBigWorldEditor(id, { back } = {}) {
         h('button', { type: 'button', onclick: () => organizeRules().catch(fail) }, ic('sparkles', '整理角色卡規則（AI）')),
         h('span', { class: 'muted small-note' }, '角色卡的系統提示常混著共用的扮演規則（例如不替玩家說話、回應長度）。這個按鈕會請 AI 把共用的部分移到上面，角色只保留自己的規則，避免重複送出與互相衝突。會呼叫一次 AI，先顯示預覽，確認後才套用。')),
       field('post_history_instructions', '後置指令（選填，放在聊天紀錄之後，例如狀態欄格式提醒）', 5)),
+    '狀態欄': statusEd.el,
     '世界書': bookPane,
     '開場白': h('div', { class: 'form' },
       h('p', { class: 'muted small-note' }, '新對話開始時，這些訊息會依序出現在聊天裡，各自用自己的頭像與對話框（由你自己寫，不會使用角色卡的開場白）。{{user}}、{{world}} 可用；清空聊天時會保留。'),
@@ -446,15 +455,29 @@ async function openBigWorldEditor(id, { back } = {}) {
         book_embedded: m.book_embedded !== false, book_linked: m.book_linked !== false, book_off: m.book_off || [] })),
       world_ids: worldBookChecks.map(l => $('input', l)).filter(i => i.checked).map(i => i.value),
       character_book: wbook.entries.length ? { ...wbook, name: wbook.name || f.name.value.trim() } : null,
+      status: statusLists.char_fields.length || statusLists.user_fields.length ? structuredClone(statusLists) : null,
   });
   const snap = () => JSON.stringify([collect(), cover.url || null, !!cover.remove]);
   let baseline = '';
   const save = async () => {
     const data = collect();
     if (!data.name) return toast('請輸入世界名稱', true);
+    const statusErr = statusEd.check();
+    if (statusErr) return toast(statusErr, true);
     try {
       const body = { data, cover: cover.url || undefined, remove_cover: cover.remove || undefined };
-      const r = isNew ? await api('POST', '/api/bigworlds', body) : await api('PUT', `/api/bigworlds/${id}`, body);
+      // 打開之後在別處改過（card_stale）：讓你選仍要覆蓋、重新讀取或取消
+      const put = force => api('PUT', `/api/bigworlds/${id}`, { ...body, base_ver: w.ver, ...(force ? { force: true } : {}) });
+      let r;
+      if (isNew) r = await api('POST', '/api/bigworlds', body);
+      else {
+        try { r = await put(false); } catch (e) {
+          if (e.code !== 'card_stale') throw e;
+          const pick = await askCardStale('世界卡');
+          if (pick === 'force') r = await put(true);
+          else { if (pick === 'cancel') closeModal(); else if (pick === 'reload') { closeModal(); openBigWorldEditor(id, { back }).catch(fail); } return; }
+        }
+      }
       closeModal(); toast(isNew ? '世界已建立' : '世界已儲存');
       if (!$('#chatView').hidden && state.char?.id === WORLD_PREFIX + r.id) await enterChat(state.char.id, state.chatId);
       else await loadChars();
@@ -553,7 +576,7 @@ function orderTag(kind, id, current, look = {}) {
  * 角色詳情的卡片 token 估算（和送出時同一套算法，見 core.js 的 estTok）：
  * 角色設定＝每次對話都會送出的欄位；開場白＝主要開場白（會成為聊天紀錄的第一則）；世界書＝內嵌條目，關鍵字觸發時才送
  */
-function cardTokens(d) {
+function cardTokens(d, extra = null) { // extra：放在同一列最右邊的東西（匯入對話的小按鈕）
   const name = d.name || '';
   const t = s => estTok(String(s || '').replace(/\{\{char\}\}|<BOT>/gi, name).replace(/\{\{user\}\}|<USER>/gi, state.settings?.user_name || 'User'));
   const core = ['description', 'personality', 'scenario', 'system_prompt', 'post_history_instructions', 'mes_example'].reduce((s, k) => s + t(d[k]), 0);
@@ -567,7 +590,8 @@ function cardTokens(d) {
     h('span', { class: 'dt-total' }, icon('file-text'), `卡片約 ${n(core + greet)} tokens`),
     part('角色設定', core),
     part('開場白', greet, alts ? `（另有 ${alts} 則備用）` : ''),
-    entries.length ? part('世界書', book, `（${entries.length} 條，觸發時才送）`) : null);
+    entries.length ? part('世界書', book, `（${entries.length} 條，觸發時才送）`) : null,
+    extra);
 }
 
 async function openCharDetail(id, { back } = {}) {
@@ -590,7 +614,7 @@ async function openCharDetail(id, { back } = {}) {
           ? h('div', { class: 'detail-intro mtext', html: formatText(nameMacros(d.creator_notes, d.name)) })
           : h('div', { class: 'detail-intro muted' }, '（還沒有介紹，可以按「編輯角色」填寫）'))),
     chatButtons(info, closeModal),
-    cardTokens(d));
+    cardTokens(d, importChatBtn(id)));
   openModal(d.name, body, [], { esc: true, back });
 }
 
@@ -600,16 +624,30 @@ $('#fileImport').onchange = async e => {
   for (const f of files) {
     try {
       const r = await api('POST', '/api/characters/import', f, { 'X-Filename': encodeURIComponent(f.name) });
-      toast(`已匯入：${r.name}`);
+      // 角色卡 V3／.charx 帶來的表情圖：匯入幾張、略過哪些（和原因）
+      const ex = r.expressions || { added: [], skipped: [] };
+      toast(`已匯入：${r.name}` + (ex.added.length ? `（含 ${ex.added.length} 張表情圖）` : ''));
+      if (ex.skipped.length) toast(`${r.name}：有 ${ex.skipped.length} 張圖片沒有匯入\n` + ex.skipped.slice(0, 5).map(x => `・${x.file}：${x.reason}`).join('\n') + (ex.skipped.length > 5 ? '\n…' : ''), true, 8000);
     } catch (err) { toast(`${f.name}：${err.message}`, true); }
   }
   if ($('#homeView').hidden) go('#/'); else await loadChars();
 };
-// 拖放匯入
-document.addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
+// 拖放匯入：只在首頁，而且只收從電腦拖進來的檔案。
+// 頁面裡的圖片（頭像、表情圖）拖動時瀏覽器也會當成檔案，要排除，不然在對話頁拖到圖片就會跳出匯入失敗
+let dragFromPage = false;
+document.addEventListener('dragstart', () => { dragFromPage = true; });
+document.addEventListener('dragend', () => { dragFromPage = false; });
+const canDropImport = () => !dragFromPage && !$('#homeView').hidden && $('#modal').hidden;
+document.addEventListener('dragover', e => {
+  if (!e.dataTransfer.types.includes('Files') || !$('#modal').hidden) return;
+  // 一律攔下（檔案拖到別的頁面放開時，瀏覽器才不會直接打開它、離開酒館）；不能匯入的地方游標顯示「不能放」
+  e.preventDefault();
+  e.dataTransfer.dropEffect = canDropImport() ? 'copy' : 'none';
+});
 document.addEventListener('drop', e => {
   if (!e.dataTransfer.files.length || !$('#modal').hidden) return;
   e.preventDefault();
+  if (!canDropImport()) { dragFromPage = false; return; }
   const dt = new DataTransfer(); [...e.dataTransfer.files].forEach(f => dt.items.add(f));
   $('#fileImport').files = dt.files; $('#fileImport').onchange({ target: $('#fileImport') });
 });

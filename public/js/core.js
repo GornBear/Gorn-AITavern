@@ -46,7 +46,7 @@ async function api(method, url, body, raw) {
   else if (body !== undefined) { opt.body = JSON.stringify(body); opt.headers['Content-Type'] = 'application/json'; }
   const res = await fetch(url, opt);
   const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(j.error || `HTTP ${res.status}`), { status: res.status, code: j.code }); // status、code：呼叫端分辨衝突（409、card_stale）用
   return j;
 }
 
@@ -62,6 +62,15 @@ function splitThink(s) {
   const vis = String(s || '').replace(/<(think|thinking)>([\s\S]*?)(<\/\1>|$)/gi, (_, _tag, t) => { think += t; return ''; });
   return { think: think.trim(), vis: vis.replace(/^\s+/, '') };
 }
+/**
+ * 串流中先不顯示狀態欄的標籤：<status>…</status>、<expression>…</expression>，還沒寫完的標籤（含最後半截的「<sta」）也藏起來。
+ * 生成完成後伺服器會把標籤拿掉、解析成面板上的狀態（lib/status.js）
+ */
+// 和 lib/status.js 的 TAG_RE、OPEN_TAG_RE 相同（<status-bar> 這種卡片自訂的 HTML 不算）
+const hideStatusTags = s => String(s || '')
+  .replace(/<(status|expression)(?=[\s>/])[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+  .replace(/<(status|expression)(?:(?=[\s>/])[^<>]*>[\s\S]*|[\w\s="'-]*)$/i, '')
+  .replace(/<(?:s(?:t(?:a(?:t(?:u)?)?)?)?|e(?:x(?:p(?:r(?:e(?:s(?:s(?:i(?:o)?)?)?)?)?)?)?)?)?$/i, '');
 const thinkBox = (text, label = '思考過程') => h('details', { class: 'think' }, h('summary', {}, icon('lightbulb'), h('span', { class: 'lbl' }, label)), h('div', { class: 'think-body' }, text));
 const fail = e => { console.error(e); toast(e.message || String(e), true); };
 
@@ -478,6 +487,20 @@ function pickImage(maxW = 1280, { crop } = {}) {
   });
 }
 const charName = c => c.name || c.data?.name || '?';
+// ---------- 表情圖（狀態欄的圖片；角色資料夾的 expressions/） ----------
+// 預設表情：表情圖分頁固定排出的 8 個格子。檔名用英文（大多和 SillyTavern 表情包相同；害羞、緊張用比較短的 shy、nervous，
+// 匯入時 embarrassment、nervousness 會自動改成這兩個名稱，見 lib/expressions.js 的 ALIASES），
+// 畫面顯示「開心（joy）」；送給模型與存檔一律用檔名。自訂的表情照原本的名稱顯示
+const EXPR_PRESETS = [['neutral', '平常'], ['joy', '開心'], ['sadness', '難過'], ['anger', '生氣'],
+  ['shy', '害羞'], ['surprise', '驚訝'], ['fear', '害怕'], ['nervous', '緊張']].map(([name, zh]) => ({ name, zh }));
+const exprPreset = name => EXPR_PRESETS.find(p => p.name === String(name).toLowerCase()) || null;
+/** 表情的顯示名稱：預設表情是「開心（joy）」，自訂的照原本的名稱 */
+const exprLabel = name => { const p = exprPreset(name); return p ? `${p.zh}（${name}）` : String(name); };
+const exprUrl = (charId, e) => `/api/characters/${charId}/expression?name=${encodeURIComponent(e.name)}&v=${e.ver || 0}`;
+/** 卡片上的預設表情（角色卡 extensions.ai_tavern_expressions.default） */
+const defaultExpr = ch => ch?.data?.extensions?.ai_tavern_expressions?.default || null;
+/** 找表情（不分大小寫）；沒有就是 null */
+const findExpr = (ch, name) => (name ? (ch?.expressions || []).find(e => e.name.toLowerCase() === String(name).toLowerCase()) || null : null);
 const avatarEl = (c, cls = '') => hasImg(c) ? h('img', { src: imgUrl(c, 'avatar'), class: cls, alt: '' }) : h('div', { class: 'avatar-ph ' + cls }, charName(c).slice(0, 1));
 const coverEl = (c, cls = '', attrs = {}) => hasImg(c) ? h('img', { src: imgUrl(c, c.has_cover ? 'cover' : 'avatar'), class: cls, alt: '', ...attrs }) : h('div', { class: 'avatar-ph ' + cls, ...attrs }, charName(c).slice(0, 1));
 // 使用者頭像（設定 → 使用者 可以更換）；對話指定了使用者設定檔時用它的頭像（global：一律用設定頁的，例如設定頁的預覽）
@@ -497,6 +520,46 @@ const userAvatarEl = (cls, { global = false } = {}) => {
 const fmtTime = t => t ? new Date(t).toLocaleString('zh-TW', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 
 function download(url) { const a = h('a', { href: url, download: '' }); document.body.append(a); a.click(); a.remove(); }
+/** 這個畫面是在執行酒館的這台電腦上開的（應用程式視窗、或本機瀏覽器）：匯出時可以由伺服器直接存檔 */
+const onHostMachine = () => ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname);
+/**
+ * 匯出（角色卡、世界書、備份、全部資料）。在這台電腦上：伺服器直接存到「下載」資料夾，顯示實際的存檔路徑；
+ * 別台裝置（手機、區網）或直接存檔失敗時：照舊讓瀏覽器下載（url）。
+ * what = { kind: 'char'|'world'|'backup'|'all', id, format }（見 server.js 的 EXPORTS）
+ */
+async function exportFile(what, url) {
+  if (!onHostMachine()) { download(url); return toast('已開始下載，檔案會存在這台裝置的下載資料夾'); }
+  try {
+    const r = await api('POST', '/api/export-save', what);
+    toast(`已匯出至「${r.path}」`, false, 8000);
+  } catch (e) {
+    toast(`無法直接存檔（${e.message}），改用瀏覽器下載`, true);
+    download(url);
+  }
+}
+/**
+ * 匯入 SillyTavern 的對話（.jsonl）成這個角色（大世界：world-<id>）的對話，完成後打開它。
+ * into：從某段對話的「對話設定」匯入時傳那段對話的 id，還停在開場白就直接帶入，已經有內容就開一段新的
+ */
+function importChatFile(ownerKey, { into = null } = {}) {
+  const input = h('input', { type: 'file', accept: '.jsonl,application/jsonl,application/json,text/plain' });
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const r = await api('POST', `/api/characters/${ownerKey}/chats/import${into ? `?into=${encodeURIComponent(into)}` : ''}`, await file.arrayBuffer(), true);
+      closeModal();
+      toast(r.replaced ? `已把「${file.name}」帶入這段對話：${r.count} 則訊息` : `已匯入「${file.name}」成一段新對話：${r.count} 則訊息`);
+      const hash = `#/chat/${ownerKey}/${r.id}`;
+      if (location.hash === hash) await route(); else go(hash); // 帶入目前這段：重新讀取
+    } catch (e) { fail(e); }
+  };
+  input.click();
+}
+/** 檢視頁用的小按鈕：匯入 SillyTavern 的對話（開一段新對話） */
+const importChatBtn = ownerKey => h('button', { type: 'button', class: 'small import-chat', title: '把 SillyTavern 的對話檔（.jsonl）匯入成一段新對話',
+  onclick: e => { e.stopPropagation(); importChatFile(ownerKey); } }, ic('import', '匯入對話'));
+const exportCharFile = (id, format) =>exportFile({ kind: 'char', id, format }, `/api/characters/${id}/export?format=${format}`);
 
 /**
  * 酒館自己的文字輸入視窗（取代瀏覽器的 prompt()：那個會顯示「127.0.0.1:8000 顯示」，樣式也改不了）。
@@ -535,7 +598,9 @@ const trashDaysText = () => `${state.settings?.trash_days ?? 7} 天內可以在�
  * 酒館自己的確認視窗（取代瀏覽器的 confirm()）。message 的第一行是標題，其餘是說明；
  * danger：確定按鈕用紅色（刪除、清空這類無法復原的動作）。回傳 true／false
  */
-function askConfirm(message,{ okText, cancelText = '取消', danger } = {}) {
+function askConfirm(message, { okText, cancelText = '取消', danger, okOnly = false } = {}) {
+  // okOnly：只是告知（只有一個「確定」按鈕）
+  if (okOnly) return askChoice(message, [{ value: true, label: okText || '確定', primary: true }], true);
   const [title, ...rest] = String(message).split('\n');
   const body = rest.join('\n').trim();
   const isDanger = danger ?? /刪除|清空|無法復原/.test(message);
@@ -557,6 +622,36 @@ function askConfirm(message,{ okText, cancelText = '取消', danger } = {}) {
     document.addEventListener('keydown', onKey, true);
     document.body.append(ov);
     (isDanger ? cancelBtn : okBtn).focus();
+  });
+}
+/**
+ * 存卡片（角色卡、大世界、世界書）時，伺服器說「打開編輯之後在別處改過」（409 card_stale）：問要怎麼辦。
+ * 回傳 'force'（仍要覆蓋）、'reload'（重新讀取最新的內容）、'cancel'（關閉編輯視窗），按 Esc 是 null（回到編輯，什麼都不做）
+ */
+const askCardStale = what => askChoice(`這張${what}已經在其他地方改過\n你打開編輯之後，這張${what}在別的視窗或裝置存過。\n・仍要覆蓋：用你現在的內容存檔，那邊的修改會不見。\n・重新讀取：載入最新的內容重新編輯，你在這裡還沒存的修改會不見。\n・取消：關閉編輯視窗，什麼都不存。`, [
+  { value: 'cancel', label: '取消（關閉編輯視窗）' },
+  { value: 'reload', label: '重新讀取', primary: true },
+  { value: 'force', label: '仍要覆蓋', danger: true },
+]);
+/**
+ * 有好幾個選擇的視窗：buttons = [{ value, label, primary?, danger? }]，由左到右排列；回傳按下的那個 value。
+ * 按 Esc、點外面回傳 dismiss（預設 null）
+ */
+function askChoice(message, buttons, dismiss = null) {
+  const [title, ...rest] = String(message).split('\n');
+  const body = rest.join('\n').trim();
+  return new Promise(resolve => {
+    const close = v => { document.removeEventListener('keydown', onKey, true); ov.remove(); resolve(v); };
+    const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(dismiss); } };
+    const btns = buttons.map(b => h('button', { type: 'button', class: b.danger ? 'danger' : b.primary ? 'primary' : '', onclick: () => close(b.value) }, b.label));
+    const ov = h('div', { class: 'crop-overlay', onmousedown: e => { if (e.target === ov) close(dismiss); } },
+      h('div', { class: 'crop-box ask-box', role: 'alertdialog' },
+        h('h3', {}, title),
+        body ? h('p', { class: 'ask-note ask-body' }, body) : null,
+        h('div', { class: 'ask-btns' }, ...btns)));
+    document.addEventListener('keydown', onKey, true);
+    document.body.append(ov);
+    (btns[buttons.findIndex(b => b.primary)] || btns[btns.length - 1]).focus();
   });
 }
 

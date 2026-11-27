@@ -1,6 +1,6 @@
 {
   "name": "ai-tavern",
-  "version": "1.7.0",
+  "version": "2.0.0-beta",
   "description": "本機 AI 酒館：角色卡聊天、世界書、串流輸出",
   "main": "server.js",
   "private": true,
@@ -12,7 +12,7 @@
     "build-launcher": "node tools/build-launcher.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0"

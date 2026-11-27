@@ -1,6 +1,12 @@
 // 以「應用程式模式」啟動：開伺服器 → 用 Edge / Chrome 的 --app 開獨立視窗 → 視窗關閉時結束伺服器
 'use strict';
 
+// Node.js 太舊：先說清楚再結束（不然會是一串看不懂的錯誤）。版本要求和 package.json 的 engines 一致
+if (+process.versions.node.split('.')[0] < 22) {
+  console.error(`\n  AI 酒館需要 Node.js 22 以上的版本，目前是 ${process.version}。\n  請到 https://nodejs.org/ 安裝 LTS 版（會直接更新原本的版本）。\n`);
+  process.exit(1);
+}
+
 const fs = require('fs');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
@@ -69,6 +75,9 @@ function openDefaultBrowser(url) {
     return;
   }
 
+  // 設定頁按過「清理快取」、當時視窗開著清不掉的：瀏覽器還沒啟動，現在清
+  // （已經有一個酒館在執行時不清：它的視窗可能正在用這些檔案）
+  if (!existing) try { const r = require('./lib/app-cache').clearPending(); if (r)console.log(`  已清理應用程式視窗的快取（${Math.round(r.freed / 1048576)} MB）`); } catch { /* 下次再清 */ }
   fs.mkdirSync(PROFILE, { recursive: true });
   const args = [
     `--app=${url}/?app=1`, // ?app=1：讓頁面知道自己在應用程式視窗裡，才回報視窗位置

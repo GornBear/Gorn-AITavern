@@ -11,7 +11,7 @@ const PROFILE_FIELDS = ['provider', 'openai', 'gemini', 'anthropic', 'max_tokens
   'retry_max', 'director_history'];
 
 async function openSettings() {
-  const { settings: s, keys, version } = await api('GET', '/api/settings');
+  const { settings: s, keys, version, languages = {} } = await api('GET', '/api/settings');
   state.worlds = await api('GET', '/api/worlds');
   const prof = await api('GET', '/api/profiles');
   const f = {};
@@ -56,7 +56,8 @@ async function openSettings() {
   const pickers = {};
   const modelField = (p, key, value) => {
     const input = inp(key, { value, placeholder: '輸入模型名稱，或按「取得模型清單」' });
-    const sel = h('select', { hidden: true, onchange: () => { if (sel.value) input.value = sel.value; } });
+    const sel = h('select', { hidden: true, onchange: () => { if (sel.value) input.value = sel.value; showCtxNote(); } });
+    input.addEventListener('input', () => showCtxNote());
     pickers[p] = { input, sel };
     return h('label', {}, h('span', {}, '模型'),
       h('div', { style: 'display:flex;gap:6px' }, input, h('button', { type: 'button', onclick: () => fetchModels(p) }, '取得模型清單')), sel);
@@ -100,7 +101,7 @@ async function openSettings() {
   f.an_effort.value = s.anthropic.effort || '';
   f.an_think.value = s.anthropic.thinking || '';
   const sync = () => { oaBox.hidden = provider.value !== 'openai'; gmBox.hidden = provider.value !== 'gemini'; anBox.hidden = provider.value !== 'anthropic'; };
-  provider.onchange = sync; sync();
+  provider.onchange = () => { sync(); showCtxNote(); }; sync();
 
   async function fetchModels(p) {
     try {
@@ -110,7 +111,8 @@ async function openSettings() {
       const kv = keyEl.value.trim();
       const body = { provider: p, ...(p === 'openai' ? { base_url: f.oa_url.value.trim() } : {}) };
       if (kv && !isMask(kv)) body.api_key = kv; else if (modelNew && !kv) body.api_key = '';
-      const { models } = await api('POST', '/api/models', body);
+      const { models, context } = await api('POST', '/api/models', body);
+      modelCtx[p] = context || {};
       const { input, sel } = pickers[p];
       if (!models.length) return toast('沒有取得任何模型。本機模型請確認已在 LM Studio / Ollama 載入模型', true);
       sel.innerHTML = '';
@@ -129,7 +131,36 @@ async function openSettings() {
         toast(`取得 ${models.length} 個模型，已自動選擇「${pick}」，可從下拉選單更換`);
       }
       sel.focus();
+      showCtxNote();
     } catch (e) { fail(e); }
+  }
+  // 模型的上下文長度（取得模型清單時平台有提供的：OpenRouter、Gemini、LM Studio 等）：顯示在「上下文長度」下面，
+  // 設定超過時提醒，可以一鍵改成模型的長度。LM Studio 以目前載入時設定的長度為準
+  const modelCtx = {}; // 供應商 → { 模型 id: { max, loaded? } }
+  const ctxNote = h('p', { class: 'small-note ctx-model', hidden: true });
+  const fmtN = n => Number(n).toLocaleString('en-US');
+  function showCtxNote() {
+    const p = provider.value, id = pickers[p]?.input.value.trim();
+    const info = id && modelCtx[p]?.[id];
+    ctxNote.hidden = !info;
+    if (!info || !f.context_tokens) return;
+    const limit = info.loaded || info.max;
+    const cur = +f.context_tokens.value || 0;
+    const over = cur > limit;
+    ctxNote.classList.toggle('warn', over);
+    ctxNote.innerHTML = '';
+    // Ollama 沒在 Modelfile 寫 num_ctx 時，實際載入的長度看它自己的設定（通常比模型上限小很多），不提供一鍵套用上限
+    const ollamaUnknown = info.ollama && !info.loaded;
+    ctxNote.append(info.ollama
+      ? (info.loaded
+        ? `「${id}」在 Ollama 設定的上下文長度（num_ctx）是 ${fmtN(info.loaded)}（模型最多支援 ${fmtN(info.max)}）。`
+        : `「${id}」最多支援 ${fmtN(info.max)}。Ollama 實際用的長度看它的設定（Modelfile 的 num_ctx，或環境變數 OLLAMA_CONTEXT_LENGTH），沒有特別設定時通常小很多，上下文長度請設成不超過 Ollama 實際載入的長度。`)
+      : info.loaded
+        ? `「${id}」在 LM Studio 目前載入的上下文長度是 ${fmtN(info.loaded)}（模型最多支援 ${fmtN(info.max || info.loaded)}）。`
+        : `「${id}」的上下文長度上限是 ${fmtN(info.max)}。`,
+      over ? `目前設定的 ${fmtN(cur)} 超過了，可能會出錯或回應被截斷。` : '');
+    const want = Math.max(512, Math.floor(limit / 512) * 512);
+    if (cur !== want && !ollamaUnknown) ctxNote.append(' ', h('button', { type: 'button', class: 'small', onclick: () => { f.context_tokens.value = want; showCtxNote(); } }, `設成 ${fmtN(want)}`));
   }
 
   const num = (key, v, attrs) => (f[key] = h('input', { type: 'number', value: v, ...attrs }));
@@ -143,6 +174,30 @@ async function openSettings() {
     el.value = String(value);
     return el;
   };
+  // 對話語言的選單與提醒文字（見提示詞設定頁）
+  const LANG_OPTS = [['zh-TW', '繁體中文'], ['zh-CN', '简体中文'], ['en', 'English'], ['ja', '日本語']];
+  const langSel = h('select', { class: 'lang-sel' }, LANG_OPTS.map(([v, t]) => h('option', { value: v }, t)),
+    h('option', { value: 'custom', class: 'opt-custom' }, '（自訂）'));
+  const langNote = h('textarea', { rows: 3 });
+  /** 切換成某個語言（帶入預設文字），或 'custom'（帶入自訂的文字） */
+  const setLang = v => {
+    langSel.value = v === 'custom' || Object.hasOwn(languages, v) ? v : 'zh-TW';
+    langNote.value = langSel.value === 'custom' ? s.language_custom || '' : languages[langSel.value] || '';
+    langSel.classList.toggle('custom', langSel.value === 'custom');
+  };
+  setLang(s.reply_language || 'zh-TW');
+  // 選語言：換成那個語言的預設文字；選「（自訂）」：輸入框的文字不動，直接當成自訂的內容送出
+  langSel.onchange = () => {
+    const custom = langSel.value === 'custom';
+    if (!custom) langNote.value = languages[langSel.value] || '';
+    langSel.classList.toggle('custom', custom);
+  };
+  langNote.addEventListener('input', () => {
+    // 改回和某個語言的預設文字一模一樣：當成選了那個語言
+    const same = LANG_OPTS.find(([v]) => languages[v] === langNote.value);
+    langSel.value = same ? same[0] : 'custom';
+    langSel.classList.toggle('custom', !same);
+  });
   const worldChecks = state.worlds.map(w => h('label', { class: 'check' }, h('input', { type: 'checkbox', value: w.id, checked: (s.world_ids || []).includes(w.id) }), w.name));
 
   // 使用者頭像：選好圖片就直接上傳（使用中的使用者設定檔的頭像也一起更新）。
@@ -266,7 +321,6 @@ async function openSettings() {
 
   // 資料備份與搬家：每次啟動自動備份；可以下載、還原、匯出全部資料到別台電腦
   const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
-  const download = url => { const a = h('a', { href: url, download: '' }); document.body.append(a); a.click(); a.remove(); };
   const bkInfo = h('p', { class: 'muted small-note' });
   const bkList = h('div', { class: 'list backup-list' });
   const BK_KIND = { manual: '手動', restore: '還原前' };
@@ -285,7 +339,7 @@ async function openSettings() {
           if (!await askConfirm(`還原到 ${new Date(b.created).toLocaleString('zh-TW', { hour12: false })} 的備份？\n目前的資料會先自動備份一份，再換成這份備份的內容（API 金鑰不受影響）。`)) return;
           try { await api('POST', `/api/backups/${b.name}/restore`); toast('已還原，重新載入中…'); setTimeout(() => location.reload(), 600); } catch (e) { fail(e); }
         } }, ic('list-restart', '還原')),
-        h('button', { type: 'button', class: 'small', title: '下載成一個完整的檔案（含圖片）', onclick: () => download(`/api/backups/${b.name}/download`) }, ic('save', '下載')),
+        h('button', { type: 'button', class: 'small', title: '下載成一個完整的檔案（含圖片）', onclick: () => exportFile({ kind: 'backup', id: b.name }, `/api/backups/${b.name}/download`) }, ic('save', '下載')),
         h('button', { type: 'button', class: 'small icon', title: '刪除這份備份', onclick: async () => {
           if (!await askConfirm('刪除這份備份？')) return;
           await api('DELETE', `/api/backups/${b.name}`).catch(fail); renderBackups().catch(fail);
@@ -296,6 +350,10 @@ async function openSettings() {
   const importInput = h('input', { type: 'file', accept: '.tavern,.gz', hidden: true, onchange: async e => {
     const file = e.target.files[0]; e.target.value = '';
     if (!file) return;
+    // 大檔案：匯入時伺服器要把整個檔案讀進記憶體，太大會很慢或失敗；建議改成直接複製 userdata 資料夾
+    const MB = 1048576, copyTip = '資料很多時，建議改用直接複製資料夾：先關掉兩台電腦的酒館，把舊電腦 AI 酒館資料夾裡的 userdata 資料夾整個複製到新電腦的 AI 酒館資料夾（取代原本的 userdata），再開啟酒館即可（API 金鑰也會一起帶過去）。';
+    if (file.size > 1024 * MB) return askConfirm(`「${file.name}」有 ${fmtSize(file.size)}，超過匯入的上限（1 GB）。\n\n${copyTip}`, { okOnly: true }).catch(() => {});
+    if (file.size > 300 * MB && !await askConfirm(`「${file.name}」有 ${fmtSize(file.size)}。匯入時要把整個檔案讀進記憶體，可能要等很久，記憶體不夠時也可能失敗。\n\n${copyTip}\n\n仍要用匯入的方式嗎？`)) return;
     if (!await askConfirm(`匯入「${file.name}」？\n目前的角色、對話、世界、世界書與設定會換成檔案裡的內容（目前的資料會先自動備份一份；API 金鑰與連線設定不受影響）。`)) return;
     try {
       toast('匯入中…');
@@ -313,10 +371,11 @@ async function openSettings() {
     bkInfo,
     h('div', { class: 'prof-row' },
       h('button', { type: 'button', onclick: async () => { try { await api('POST', '/api/backups'); toast('已備份'); renderBackups(); } catch (e) { fail(e); } } }, ic('save', '立即備份')),
-      h('button', { type: 'button', title: '所有角色、對話、世界、世界書、設定與圖片打包成一個檔案，可以帶到別台電腦', onclick: () => download('/api/export') }, ic('export', '匯出全部資料')),
+      h('button', { type: 'button', title: '所有角色、對話、世界、世界書、設定與圖片打包成一個檔案，可以帶到別台電腦', onclick: () => exportFile({ kind: 'all' }, '/api/export') }, ic('export', '匯出全部資料')),
       h('button', { type: 'button', onclick: () => importInput.click() }, ic('import', '匯入資料…')), importInput),
     bkList,
-    h('p', { class: 'muted small-note' }, '備份存在 userdata/backups，和上一份完全相同時不會重複建立；超過保留份數時，重新啟動會刪掉最舊的。備份與匯出都不包含 API 金鑰（config.json），換電腦後請重新填寫。'));
+    h('p', { class: 'muted small-note' }, '備份存在 userdata/backups，和上一份完全相同時不會重複建立；超過保留份數時，重新啟動會刪掉最舊的。備份與匯出都不包含 API 金鑰（config.json），換電腦後請重新填寫。'),
+    h('p', { class: 'muted small-note' }, '搬到另一台電腦也可以不用匯出、匯入：關掉兩邊的酒館，把 AI 酒館資料夾裡的 userdata 資料夾整個複製過去（取代新電腦原本的 userdata），再開啟酒館即可。資料很多（例如好幾百 MB）時建議用這個方法，API 金鑰也會一起帶過去。'));
 
   const systemPane = h('div', { class: 'form' },
     profBox,
@@ -324,12 +383,13 @@ async function openSettings() {
     h('label', {}, h('span', {}, 'API 供應商'), provider), oaBox, gmBox, anBox,
     h('fieldset', {}, h('legend', {}, '生成參數'),
       h('div', { class: 'row' },
-        h('label', {}, h('span', {}, '上下文長度 tokens'), num('context_tokens', s.context_tokens, { min: 512, step: 512 })),
+        h('label', {}, h('span', {}, '上下文長度 tokens'), num('context_tokens', s.context_tokens, { min: 512, step: 512, oninput: () => showCtxNote() })),
         h('label', {}, h('span', {}, '最大回應 tokens'), num('max_tokens', s.max_tokens, { min: 16, step: 16 })),
         h('label', {}, h('span', {}, 'Temperature'), num('temperature', s.temperature, { min: 0, max: 2, step: 0.05 })),
         h('label', {}, h('span', {}, 'Top P'), num('top_p', s.top_p, { min: 0, max: 1, step: 0.05 })),
         h('label', {}, h('span', {}, '重複懲罰（1 = 關閉）'), num('repetition_penalty', s.repetition_penalty ?? 1, { min: 1, max: 2, step: 0.01 })),
         h('label', {}, h('span', {}, '連線失敗時自動重試'), f.retry_max = optSel(s.retry_max ?? 2, [[0, '不重試'], [1, '1 次'], [2, '2 次'], [3, '3 次'], [5, '5 次']]))),
+      ctxNote,
       // 各參數的用途：整理在底下逐條列出
       h('ol', { class: 'param-notes' }, [
         ['上下文長度', '每次送給 AI 的內容總共最多多長（含系統提示、角色設定、世界書、記憶、聊天紀錄與回應）。預設 64000。不要超過模型支援的長度；本機小模型（LM Studio、Ollama 等）請設成不超過載入時的長度，出錯、變得很慢或回應被截斷時請調小。角色多的大世界提示詞比較長，聊天紀錄的空間不夠時，「對話設定」會提醒要調到多少。'],
@@ -421,14 +481,34 @@ async function openSettings() {
   api('GET', '/api/runtime').then(renderRuntime).catch(() => { rtInfo.textContent = '讀取失敗。'; });
   const runtimeBox = h('fieldset', {}, h('legend', {}, '內附的 Node.js'), rtInfo, rtBtns);
 
-  const dataPane = h('div', { class: 'form' }, keyWarning(), backupBox, trashBox, runtimeBox);
+  // 應用程式視窗的快取（data/app-profile）：網頁、程式碼與繪圖的快取，清掉不影響資料，只是下次開啟時重新建立
+  const cacheInfo = h('p', { class: 'muted small-note' }, '讀取中…');
+  const renderCache = st => {
+    cacheInfo.textContent = !st.exists ? '這台電腦還沒有用應用程式視窗開過酒館，沒有快取。'
+      : `應用程式視窗的資料（data/app-profile）共 ${fmtSize(st.size)}，其中可以清掉的快取約 ${fmtSize(st.cache)}。`
+        + (st.pending ? '有一部分正在使用中，會在下次開啟酒館時清掉。' : '');
+  };
+  api('GET', '/api/app-cache').then(renderCache).catch(() => { cacheInfo.textContent = '讀取失敗。'; });
+  const cacheBox = h('fieldset', {}, h('legend', {}, '應用程式視窗的快取'),
+    cacheInfo,
+    h('div', { class: 'prof-row' }, h('button', { type: 'button', onclick: async () => {
+      try {
+        const r = await api('POST', '/api/app-cache/clear');
+        renderCache(r);
+        toast(`已清掉 ${fmtSize(r.freed)}` + (r.pending ? '；正在使用中的部分會在下次開啟酒館時清掉' : ''));
+      } catch (e) { fail(e); }
+    } }, ic('eraser', '清理快取'))),
+    h('p', { class: 'muted small-note' }, '只清網頁、程式碼與繪圖的快取（下次開啟時會重新建立，第一次可能稍慢），不會動到角色、對話、設定，也不會清掉輸入框的草稿。'));
+
+  const dataPane = h('div', { class: 'form' }, keyWarning(), backupBox, trashBox, runtimeBox, cacheBox);
 
   const promptPane = h('div', { class: 'form' },
-    // 對話語言：伺服器依選擇，在每次送出內容的最後加上該語言寫的提醒（lib/prompt.js 的 LANGUAGES）
+    // 對話語言：伺服器依選擇，在每次送出內容的最後加上該語言寫的提醒（lib/prompt.js 的 LANGUAGES）。
+    // 選語言時把那個語言的提醒帶進下面的輸入框；改了輸入框，選單就變成灰色的「（自訂）」，送出的是輸入框的內容
     h('fieldset', {}, h('legend', {}, '對話語言'),
-      h('label', {}, h('span', {}, '要求模型使用的語言（回覆、思考過程與整理的記憶）'),
-        f.reply_language = optSel(s.reply_language || 'zh-TW', [['zh-TW', '繁體中文'], ['zh-CN', '简体中文'], ['en', 'English'], ['ja', '日本語']])),
-      h('p', { class: 'muted small-note' }, '選擇的語言會寫成一段提醒，放在每次送給模型的內容最後面（模型最容易注意到的位置），角色、旁白與整理記憶都會帶上。角色卡、世界書或聊天紀錄是其他語言時，或思考型模型把思考預算調低時，比較不會被帶著換成其他語言。'),
+      h('label', {}, h('span', {}, '要求模型使用的語言（回覆、思考過程與整理的記憶）'), f.reply_language = langSel),
+      h('label', {}, h('span', {}, '語言提醒（送給模型的文字，可以修改；改過之後選單會顯示「（自訂）」）'), f.language_note = langNote),
+      h('p', { class: 'muted small-note' }, '這段提醒會放在每次送給模型的內容最後面（模型最容易注意到的位置），角色、旁白與整理記憶都會帶上。角色卡、世界書或聊天紀錄是其他語言時，或思考型模型把思考預算調低時，比較不會被帶著換成其他語言。重新選一次語言，就會換回那個語言的預設文字；清空輸入框就不送語言提醒。'),
       h('p', { class: 'note-warn' }, h('b', {}, '注意：'), '這只是對模型的要求，並非對所有模型都有效。小型或本機模型、部分思考型模型仍可能夾雜其他語言；聊天紀錄裡已經有一大段其他語言時，也容易被帶著走，這時可以刪掉或重新生成那幾則，或開一段新對話。主要系統提示等提示詞本身是中文，選其他語言時不用改它們。')),
     h('fieldset', {}, h('legend', {}, '系統提示詞'),
       h('label', {}, h('span', {}, '主要系統提示（每次都會送出；角色卡的系統提示接在後面）'), f.main_prompt = h('textarea', { rows: 8, value: s.main_prompt })),
@@ -460,7 +540,7 @@ async function openSettings() {
     resetRow(async () => {
       if (!await askConfirm('把「提示詞設定」這一頁填回程式的預設值？\n\n會填回預設的：對話語言（繁體中文）、主要系統提示、大世界系統提示、狀態欄保留則數、記憶與上下文壓縮的設定、聊天紀錄上限（角色 16k、大世界 32k）、整理記憶的指令，並取消勾選所有全域世界書。\n\n只是填進畫面，按「儲存設定」才會保存；按「還原」或離開設定頁就維持原本的設定。')) return;
       const d = await api('GET', '/api/settings/defaults');
-      f.reply_language.value = d.reply_language;
+      setLang(d.reply_language);
       f.main_prompt.value = d.main_prompt; f.use_card_sys.checked = d.use_card_system_prompt; f.keep_status.value = d.keep_status;
       f.world_prompt.value = d.world_prompt; f.mem_on.checked = d.memory_enabled; f.mem_auto.checked = d.memory_auto;
       f.history_cap_char.value = String(d.history_cap_char); f.history_cap_world.value = String(d.history_cap_world);
@@ -757,6 +837,7 @@ async function openSettings() {
       backup_keep: +f.backup_keep.value, trash_days: +f.trash_days.value, chat_render: +f.chat_render.value, external_images: f.ext_img.checked,
       ...user,
       reply_language: f.reply_language.value,
+      language_custom: f.reply_language.value === 'custom' ? f.language_note.value : '',
       main_prompt: f.main_prompt.value, use_card_system_prompt: f.use_card_sys.checked, world_prompt: f.world_prompt.value,
       keep_status: Math.max(3, +f.keep_status.value || 3),
       memory_enabled: f.mem_on.checked, memory_auto: f.mem_auto.checked,
